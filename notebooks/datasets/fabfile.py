@@ -31,9 +31,87 @@ def get_coco_dirname():
         dirname = 'coco_input'
     return dirname
 
+@task
+def generate_vdn(fast=False):
+    kill()
+    setup_django()
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from dvaapp.views import handle_uploaded_file, handle_youtube_video
+    from dvaapp import models
+    from dvaapp.models import TEvent
+    from dvaapp.tasks import extract_frames, perform_face_detection_indexing_by_id, inception_index_by_id, \
+        perform_ssd_detection_by_id, perform_yolo_detection_by_id, inception_index_regions_by_id, \
+        export_video_by_id
+    dirname = get_coco_dirname()
+    local('wget https://www.dropbox.com/s/2dq085iu34y0hdv/coco_input.zip?dl=1 -O coco.zip')
+    local('unzip coco.zip')
+    with lcd(dirname):
+        local("zip coco_input.zip -r *.jpg")
+    fname = '{}/coco_input.zip'.format(dirname)
+    with open('{}/coco_sample_metadata.json'.format(dirname)) as datafile:
+        data = json.load(datafile)
+    f = SimpleUploadedFile("coco_input.zip", file(fname).read(), content_type="application/zip")
+    v = handle_uploaded_file(f, 'mscoco_sample_500')
+    extract_frames(TEvent.objects.create(video=v).pk)
+    video = v
+    models.Region.objects.all().filter(video=video).delete()
+    for frame in models.Frame.objects.all().filter(video=video):
+        frame_id = str(int(frame.name.split('_')[-1].split('.')[0]))
+        annotation = models.Region()
+        annotation.region_type = models.Region.ANNOTATION
+        annotation.video = v
+        annotation.frame = frame
+        annotation.full_frame = True
+        annotation.metadata_json = json.dumps(data[frame_id]['image'])
+        annotation.object_name = 'metadata'
+        annotation.save()
+    for frame in models.Frame.objects.all().filter(video=video):
+        frame_id = str(int(frame.name.split('_')[-1].split('.')[0]))
+        for a in data[frame_id][u'annotations']:
+            annotation = models.Region()
+            annotation.region_type = models.Region.ANNOTATION
+            annotation.video = v
+            annotation.frame = frame
+            annotation.metadata_json = json.dumps(a)
+            annotation.full_frame = False
+            annotation.x = a['bbox'][0]
+            annotation.y = a['bbox'][1]
+            annotation.w = a['bbox'][2]
+            annotation.h = a['bbox'][3]
+            annotation.object_name = 'coco_instance/{}/{}'.format(a[u'category'][u'supercategory'], a[u'category'][u'name'])
+            annotation.save()
+        for a in data[frame_id][u'keypoints']:
+            annotation = models.Region()
+            annotation.region_type = models.Region.ANNOTATION
+            annotation.video = v
+            annotation.frame = frame
+            annotation.metadata_json = json.dumps(a)
+            annotation.x = a['bbox'][0]
+            annotation.y = a['bbox'][1]
+            annotation.w = a['bbox'][2]
+            annotation.h = a['bbox'][3]
+            annotation.object_name = 'coco_keypoints/{}/{}'.format(a[u'category'][u'supercategory'], a[u'category'][u'name'])
+            annotation.save()
+        for caption in data[frame_id][u'captions']:
+            annotation = models.Region()
+            annotation.region_type = models.Region.ANNOTATION
+            annotation.video = v
+            annotation.frame = frame
+            annotation.metadata_text = caption['caption']
+            annotation.full_frame = True
+            annotation.object_name = 'caption'
+            annotation.save()
+    if not fast:
+        inception_index_by_id(TEvent.objects.create(video=v).pk)
+        perform_ssd_detection_by_id(TEvent.objects.create(video=v).pk)
+        perform_face_detection_indexing_by_id(TEvent.objects.create(video=v).pk)
+        inception_index_regions_by_id(TEvent.objects.create(video=v).pk)
+    export_video_by_id(TEvent.objects.create(video=v).pk)
+
 
 @task
 def create_yolo_test_data():
+    import json
     import shutil
     import numpy as np
     import os
@@ -41,14 +119,14 @@ def create_yolo_test_data():
     setup_django()
     from dvaapp.shared import handle_uploaded_file
     from django.core.files.uploadedfile import SimpleUploadedFile
-    from dvaapp.models import Region,TEvent,Frame,Label,RegionLabel
-    from dvaapp.tasks import perform_dataset_extraction,perform_export
+    from dvaapp.models import Region,TEvent,Frame, AppliedLabel
+    from dvaapp.tasks import extract_frames,export_video_by_id
     try:
-        shutil.rmtree('/Users/aub3/tests/yolo_test')
+        shutil.rmtree('tests/yolo_test')
     except:
         pass
     try:
-        os.mkdir('/Users/aub3/tests/yolo_test')
+        os.mkdir('tests/yolo_test')
     except:
         pass
     data = np.load('shared/underwater_data.npz')
@@ -63,17 +141,16 @@ def create_yolo_test_data():
         4:"start_gate",
         5:"channel"
     }
-    labels = {k: Label.objects.create(name=v, set="test") for k, v in class_names}
     for i,image in enumerate(data['images'][:500]):
-        path = "/Users/aub3/tests/yolo_test/{}.jpg".format(i)
+        path = "tests/yolo_test/{}.jpg".format(i)
         Image.fromarray(image).save(path)
         id_2_boxes[path.split('/')[-1]] = data['boxes'][i].tolist()
-    local('zip /Users/aub3/tests/yolo_test.zip -r /Users/aub3/tests/yolo_test/* ')
-    fname = "/Users/aub3/tests/yolo_test.zip"
+    local('zip tests/yolo_test.zip -r tests/yolo_test/* ')
+    fname = "tests/yolo_test.zip"
     name = "yolo_test"
     f = SimpleUploadedFile(fname, file(fname).read(), content_type="application/zip")
     dv = handle_uploaded_file(f, name)
-    perform_dataset_extraction(TEvent.objects.create(video=dv).pk)
+    extract_frames(TEvent.objects.create(video=dv).pk)
     for df in Frame.objects.filter(video=dv):
         for box in id_2_boxes[df.name]:
             r = Region()
@@ -87,15 +164,15 @@ def create_yolo_test_data():
             r.w = bottom_x - top_x
             r.h = bottom_y - top_y
             r.save()
-            l = RegionLabel()
+            l = AppliedLabel()
             l.frame = df
             l.video = dv
-            l.label = labels[c]
+            l.label_name = class_names[c]
             l.region = r
             l.save()
-    perform_export(TEvent.objects.create(video=dv,arguments={'destination':'FILE'}).pk)
+    export_video_by_id(TEvent.objects.create(video=dv).pk)
     try:
-        shutil.rmtree('/Users/aub3/tests/yolo_test')
+        shutil.rmtree('tests/yolo_test')
     except:
         pass
 
@@ -107,7 +184,7 @@ def process_visual_genome():
     from dvaapp.shared import handle_uploaded_file
     from dvaapp import models
     from dvaapp.models import TEvent
-    from dvaapp.tasks import perform_dataset_extraction, export_video
+    from dvaapp.tasks import extract_frames, export_video_by_id
     from collections import defaultdict
     os.system('aws s3api get-object --request-payer "requester" --bucket visualdatanetwork --key visual_genome_objects.txt.gz  /root/DVA/visual_genome_objects.txt.gz')
     data = defaultdict(list)
@@ -121,7 +198,7 @@ def process_visual_genome():
                 'h': int(entries[5]),
                 'object_id': entries[0],
                 'object_name': entries[6],
-                'text': ' '.join(entries[6:]), })
+                'metadata_text': ' '.join(entries[6:]), })
     name = "visual_genome"
     fname = "visual_genome.zip"
     f = SimpleUploadedFile(fname, "", content_type="application/zip")
@@ -131,7 +208,7 @@ def process_visual_genome():
     os.system(
         'aws s3api get-object --request-payer "requester" --bucket visualdatanetwork --key visual_genome.zip  {}'.format(
             outpath))
-    perform_dataset_extraction(TEvent.objects.create(video=v).pk)
+    extract_frames(TEvent.objects.create(video=v).pk)
     video = v
     models.Region.objects.all().filter(video=video).delete()
     buffer = []
@@ -148,8 +225,8 @@ def process_visual_genome():
             annotation.h = o['h']
             annotation.w = o['w']
             annotation.object_name = o['object_name']
-            annotation.metadata = o
-            annotation.text = o['text']
+            annotation.metadata_json = json.dumps(o)
+            annotation.metadata_text = o['metadata_text']
             buffer.append(annotation)
             if len(buffer) == 1000:
                 try:
@@ -177,7 +254,7 @@ def process_visual_genome():
                 print "skipping"
                 print k.object_name
     print "exporting"
-    export_video(TEvent.objects.create(video=v).pk)
+    export_video_by_id(TEvent.objects.create(video=v).pk)
 
 
 @task

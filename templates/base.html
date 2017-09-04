@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <title>Deep Video Analytics</title>
+    <title>Deep Video Analytics </title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href={% static '/bootstrap/css/bootstrap.min.css' %}>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.5.0/css/font-awesome.min.css">
@@ -13,6 +13,8 @@
     <link rel="stylesheet" href={% static '/plugins/datatables/dataTables.bootstrap.css' %}>
     <link rel="stylesheet" href={% static '/dist/css/skins/_all-skins.min.css' %}>
     <link rel="stylesheet" href={% static '/custom-lte.css' %}>
+    <link rel="stylesheet" href={% static '/plugins/video-js/video-js.css' %}>
+    <link rel="stylesheet" href={% static '/plugins/video-js/videojs.markers.css' %}>
     {% block page_css %}
     {% endblock %}
     <!--[if lt IE 9]>
@@ -33,7 +35,7 @@
       </a>
       <!-- Navbar Right Menu -->
         <a href="/" class="logo">
-          <span class="logo-lg">Deep Video Analytics</span>
+          <span class="logo-lg">深度影像分析系統</span>
         </a>
      <div class="status-bar">
       {% block status_bar %}
@@ -47,7 +49,7 @@
      </div>
       <div class="navbar-custom-menu" style="display: inline-block !important;">
         <ul class="nav navbar-nav">
-          <li><a href="https://www.deepvideoanalytics.com/" target="_blank">Deep Video Analytics</a></li>
+          <li><a href="https://www.deepvideoanalytics.com/" target="_blank">版權頁</a></li>
         </ul>
       </div>
     </nav>
@@ -62,21 +64,19 @@
       <!-- /.search form -->
       <!-- Sidebar Menu -->
       <ul class="nav sidebar-menu">
-        <li><a href="/"><i class="fa fa-search"></i><span class="nav-label">Dashboard</span></a></li>
+        <li><a href="/"><i class="fa fa-search"></i><span class="nav-label">主控版</span></a></li>
         <li><a href="/videos/"><i class="fa fa fa-desktop"></i><span class="nav-label">Videos / Datasets</span></a></li>
-        <li><a href="/queries/"><i class="fa fa fa-backward"></i><span class="nav-label">Past visual queries</span></a></li>
-        <li><a href="/stored_process/"><i class="fa fa-play"></i><span class="nav-label">Run DVAPQL processes</span></a></li>
-        <li><a href="/process/"><i class="fa fa fa-clock-o"></i><span class="nav-label">Past DVAPQL processes</span></a></li>
+        <li><a href="/queries/"><i class="fa fa fa-backward"></i><span class="nav-label">Past queries</span></a></li>
         <li><a href="/textsearch/"><i class="fa fa-font"></i><span class="nav-label">Full-text Search</span></a></li>
-        <li><a href="/models/"><i class="fa fa fa-database"></i><span class="nav-label">Configured models</span></a></li>
-        <li><a href="/clustering/"><i class="fa fa-group"></i><span class="nav-label">Cluster data</span></a></li>
-        <li><a href="/training/"><i class="fa fa-bicycle"></i><span class="nav-label">Train models</span></a></li>
+        <li><a href="/indexes/"><i class="fa fa fa-database"></i><span class="nav-label">Indexing</span></a></li>
+        <li><a href="/clustering/"><i class="fa fa-group"></i><span class="nav-label">Clustering</span></a></li>
+        <li><a href="/detectors/"><i class="fa fa-square"></i><span class="nav-label">Detectors</span></a></li>
+        <li><a href="/ocr/"><i class="fa fa-font"></i><span class="nav-label">Annotators & OCR</span></a></li>
+        <li><a href="/training/"><i class="fa fa-gears"></i><span class="nav-label">Training</span></a></li>
         <li><a href="/external/"><i class="fa fa-globe"></i><span class="nav-label">Visual Data Network</span></a></li>
-        <li><a href="{% url "tasks" %}"><i class="fa fa-tasks"></i><span class="nav-label">Tasks</span></a></li>
-        <li><a href="{% url "status" %}"><i class="fa fa-question-circle"></i><span class="nav-label">Local logs</span></a></li>
+        <li><a href="/tasks/"><i class="fa fa-tasks"></i><span class="nav-label">Tasks</span></a></li>
+        <li><a href="/status"><i class="fa fa-question-circle"></i><span class="nav-label">Logs</span></a></li>
         <li><a href="/api"><i class="fa fa-keyboard-o"></i><span class="nav-label">REST API</span></a></li>
-        <li><a href="{% url "workers" %}"><i class="fa fa-laptop"></i><span class="nav-label">Manage workers</span></a></li>
-        <li><a href="/security"><i class="fa fa-ticket"></i><span class="nav-label">Security & Auth tokens</span></a></li>
         <li><a href="/admin"><i class="fa fa-lock"></i><span class="nav-label">Admin</span></a></li>
       </ul>
     </section>
@@ -102,7 +102,7 @@
     <!-- To the right -->
     <div class="pull-right hidden-xs">
     </div>
-    <strong>Copyright <a href="http://www.akshaybhat.com">Akshay Bhat, Cornell University</a> All rights reserved.</strong>
+    <strong>版權由 <a href="http://www.akshaybhat.com">Akshay Bhat, Cornell University</a> All rights reserved.</strong>
   </footer>
 </div>
 <!-- ./wrapper -->
@@ -119,7 +119,8 @@
 <link href={% static '/select2/css/select2.min.css' %} rel="stylesheet" />
 <link href={% static '/select2/css/select2-bootstrap.min.css' %} rel="stylesheet" />
 <script src={% static '/select2/js/select2.min.js' %}></script>
-<script src={% static '/ace/ace.js' %}></script>
+<script src={% static '/plugins/video-js/video-js.js' %}></script>
+<script src={% static '/plugins/video-js/videojs-markers.js' %}></script>
 {% block page_js %}
 {% endblock %}
 </body>

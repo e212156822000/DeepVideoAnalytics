@@ -1,9 +1,8 @@
 from __future__ import unicode_literals
-import os, json
+
 from django.db import models
 from django.contrib.auth.models import User
-from django.contrib.postgres.fields import ArrayField, JSONField
-from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 
 
 class VDNServer(models.Model):
@@ -17,21 +16,87 @@ class VDNServer(models.Model):
     last_token = models.CharField(max_length=300, default="")
 
 
-class DVAPQL(models.Model):
+class VDNDataset(models.Model):
+    """
+    A VDN dataset
+    """
+    server = models.ForeignKey(VDNServer)
+    response = models.TextField(default="")
+    date_imported = models.DateTimeField('date created', auto_now_add=True)
+    name = models.CharField(max_length=100,default="")
+    created = models.DateTimeField('date created', auto_now_add=True)
+    description = models.TextField(default="")
+    download_url = models.TextField(default="")
+    url = models.TextField(default="")
+    aws_requester_pays = models.BooleanField(default=False)
+    aws_region = models.TextField(default="")
+    aws_bucket = models.TextField(default="")
+    aws_key = models.TextField(default="")
+    root = models.BooleanField(default=True)
+    parent_local = models.ForeignKey('self',null=True)
+    organization_url = models.TextField()
+
+
+class VDNDetector(models.Model):
+    """
+    A VDN detector
+    """
+    server = models.ForeignKey(VDNServer)
+    response = models.TextField(default="")
+    date_imported = models.DateTimeField('date created', auto_now_add=True)
+    name = models.CharField(max_length=100,default="")
+    created = models.DateTimeField('date created', auto_now_add=True)
+    description = models.TextField(default="")
+    download_url = models.TextField(default="")
+    url = models.TextField(default="")
+    aws_requester_pays = models.BooleanField(default=False)
+    aws_region = models.TextField(default="")
+    aws_bucket = models.TextField(default="")
+    aws_key = models.TextField(default="")
+    organization_url = models.TextField()
+
+
+class CustomIndexer(models.Model):
+    """
+    A custom indexer that can be used with any TF (eventually pytorch) network
+    """
+    name = models.CharField(max_length=100)
+    algorithm = models.CharField(max_length=100,default="")
+    model_filename = models.CharField(max_length=200,default="")
+    # vdn_detector = models.ForeignKey(VDNDetector,null=True)
+    input_layer_name = models.CharField(max_length=300,default="")
+    embedding_layer_name = models.CharField(max_length=300,default="")
+    embedding_layer_size = models.CharField(max_length=300,default="")
+    indexer_queue = models.CharField(max_length=300,default="")
+    retriever_queue = models.CharField(max_length=300,default="")
+
+
+class Query(models.Model):
     """
     A query object with image_data, can have multiple children subspecies
     """
-    SCHEDULE = 'S'
-    PROCESS = 'V'
-    QUERY = 'Q'
-    TYPE_CHOICES = ((SCHEDULE, 'Schedule'), (PROCESS, 'Process'), (QUERY, 'Query'))
-    process_type = models.CharField(max_length=1, choices=TYPE_CHOICES, default=QUERY, )
     created = models.DateTimeField('date created', auto_now_add=True)
-    user = models.ForeignKey(User, null=True, related_name="submitter")
-    image_data = models.BinaryField(null=True)
-    script = JSONField(blank=True, null=True)
+    selected_indexers = ArrayField(models.CharField(max_length=30),default=[])
     results_metadata = models.TextField(default="")
     results_available = models.BooleanField(default=False)
+    user = models.ForeignKey(User, null=True,related_name="visua_query_user")
+    image_data = models.BinaryField(null=True)
+    federated = models.BooleanField(default=False)
+
+
+class IndexerQuery(models.Model):
+    parent_query = models.ForeignKey(Query)
+    created = models.DateTimeField('date created', auto_now_add=True)
+    count = models.IntegerField(default=20)
+    algorithm = models.CharField(max_length=500,default="")
+    indexer = models.ForeignKey(CustomIndexer,null=True)
+    excluded_index_entries_pk = ArrayField(models.IntegerField(), default=[])
+    vector = models.BinaryField(null=True)
+    results = models.BooleanField(default=False)
+    metadata = models.TextField(default="")
+    source_filter_json = models.TextField(default="")
+    approximate = models.BooleanField(default=False)
+    user = models.ForeignKey(User, null=True)
 
 
 class Video(models.Model):
@@ -50,41 +115,11 @@ class Video(models.Model):
     url = models.TextField(default="")
     youtube_video = models.BooleanField(default=False)
     query = models.BooleanField(default=False)
-    parent_process = models.ForeignKey(DVAPQL,null=True)
+    parent_query = models.ForeignKey(Query,null=True)
+    vdn_dataset = models.ForeignKey(VDNDataset, null=True)
 
     def __unicode__(self):
         return u'{}'.format(self.name)
-
-    def path(self,media_root=None):
-        if media_root:
-            return "{}/{}/video/{}.mp4".format(media_root, self.pk, self.pk)
-        else:
-            return "{}/{}/video/{}.mp4".format(settings.MEDIA_ROOT,self.pk,self.pk)
-
-    def create_directory(self, create_subdirs=True):
-        os.mkdir('{}/{}'.format(settings.MEDIA_ROOT, self.pk))
-        if create_subdirs:
-            os.mkdir('{}/{}/video/'.format(settings.MEDIA_ROOT, self.pk))
-            os.mkdir('{}/{}/frames/'.format(settings.MEDIA_ROOT, self.pk))
-            os.mkdir('{}/{}/segments/'.format(settings.MEDIA_ROOT, self.pk))
-            os.mkdir('{}/{}/indexes/'.format(settings.MEDIA_ROOT, self.pk))
-            os.mkdir('{}/{}/regions/'.format(settings.MEDIA_ROOT, self.pk))
-            os.mkdir('{}/{}/transforms/'.format(settings.MEDIA_ROOT, self.pk))
-            os.mkdir('{}/{}/audio/'.format(settings.MEDIA_ROOT, self.pk))
-
-
-class IngestEntry(models.Model):
-    video = models.ForeignKey(Video)
-    ingest_index = models.IntegerField()
-    ingest_filename = models.CharField(max_length=500)
-    start_segment_index = models.IntegerField(null=True)
-    start_frame_index = models.IntegerField(null=True)
-    segments = models.IntegerField(null=True)
-    frames = models.IntegerField(null=True)
-    created = models.DateTimeField('date created', auto_now_add=True)
-
-    class Meta:
-        unique_together = (("video", "ingest_filename","ingest_index"),)
 
 
 class Clusters(models.Model):
@@ -105,143 +140,29 @@ class Clusters(models.Model):
 
 
 class TEvent(models.Model):
+    VIDEO = 'V'
+    S3EXPORT = 'SE'
+    S3IMPORT = 'SI'
+    EXPORT = 'E'
+    CLUSTERING = 'CL'
+    TYPE_CHOICES = ((VIDEO, 'Video'), (S3EXPORT, 'S3 export'), (S3IMPORT, 'S3 import'), (CLUSTERING, 'Clustering'),(EXPORT,'Export as file'))
+    event_type = models.CharField(max_length=2, choices=TYPE_CHOICES, default=VIDEO, )
     started = models.BooleanField(default=False)
     completed = models.BooleanField(default=False)
     errored = models.BooleanField(default=False)
     error_message = models.TextField(default="")
     video = models.ForeignKey(Video, null=True)
     operation = models.CharField(max_length=100, default="")
-    queue = models.CharField(max_length=100, default="")
     created = models.DateTimeField('date created', auto_now_add=True)
-    start_ts = models.DateTimeField('date started', null=True)
     seconds = models.FloatField(default=-1)
-    arguments = JSONField(blank=True,null=True)
+    file_name = models.CharField(max_length=200,default="")  # FILENAME FOR EXPORT
+    key = models.CharField(max_length=300, default="")
+    bucket = models.CharField(max_length=300, default="")
+    requester_pays = models.BooleanField(default=False)
+    clustering = models.ForeignKey(Clusters,null=True)
+    arguments_json = models.TextField(default="{}")
     task_id = models.TextField(null=True)
     parent = models.ForeignKey('self',null=True)
-    parent_process = models.ForeignKey(DVAPQL,null=True)
-    imported = models.BooleanField(default=False)
-
-
-class Indexer(models.Model):
-    """
-    An indexer that can be used with any TF (eventually pytorch) network
-    """
-    TENSORFLOW = 'T'
-    CAFFE = 'C'
-    PYTORCH = 'P'
-    OPENCV = 'O'
-    MODES = (
-        (TENSORFLOW, 'Tensorflow'),
-        (CAFFE, 'Caffe'),
-        (PYTORCH, 'Pytorch'),
-        (OPENCV, 'OpenCV'),
-    )
-    mode = models.CharField(max_length=1,choices=MODES,db_index=True,default=TENSORFLOW)
-    name = models.CharField(max_length=100)
-    algorithm = models.CharField(max_length=100,default="")
-    model_filename = models.CharField(max_length=200,default="")
-    input_layer_name = models.CharField(max_length=300,default="")
-    embedding_layer_name = models.CharField(max_length=300,default="")
-    embedding_layer_size = models.CharField(max_length=300,default="")
-    created = models.DateTimeField('date created', auto_now_add=True)
-
-
-class Analyzer(models.Model):
-    """
-    """
-    TENSORFLOW = 'T'
-    CAFFE = 'C'
-    PYTORCH = 'P'
-    OPENCV = 'O'
-    MODES = (
-        (TENSORFLOW, 'Tensorflow'),
-        (CAFFE, 'Caffe'),
-        (PYTORCH, 'Pytorch'),
-        (OPENCV, 'OpenCV'),
-    )
-    mode = models.CharField(max_length=1,choices=MODES,db_index=True,default=TENSORFLOW)
-    name = models.CharField(max_length=100)
-    algorithm = models.CharField(max_length=100,default="")
-    model_filename = models.CharField(max_length=200,default="")
-    produces_labels = models.BooleanField(default=False)
-    produces_json = models.BooleanField(default=False)
-    produces_text = models.BooleanField(default=False)
-    created = models.DateTimeField('date created', auto_now_add=True)
-
-
-class Detector(models.Model):
-    TENSORFLOW = 'T'
-    CAFFE = 'C'
-    PYTORCH = 'P'
-    OPENCV = 'O'
-    YOLO = 'Y'
-    TFD = 'T'
-    MODES = (
-        (TENSORFLOW, 'Tensorflow'),
-        (CAFFE, 'Caffe'),
-        (PYTORCH, 'Pytorch'),
-        (OPENCV, 'OpenCV'),
-    )
-    DETECTOR_TYPES = (
-        (TFD, 'Tensorflow'),
-        (YOLO, 'YOLO V2'),
-    )
-    mode = models.CharField(max_length=1,choices=MODES,db_index=True,default=TENSORFLOW)
-    detector_type = models.CharField(max_length=1,choices=DETECTOR_TYPES,db_index=True,null=True)
-    name = models.CharField(max_length=100)
-    algorithm = models.CharField(max_length=100,default="")
-    model_filename = models.CharField(max_length=200,null=True)
-    arguments = models.TextField(default="")
-    phase_1_log = models.TextField(default="")
-    phase_2_log = models.TextField(default="")
-    class_distribution = models.TextField(default="")
-    class_names = models.TextField(default="")
-    frames_count = models.IntegerField(default=0)
-    boxes_count = models.IntegerField(default=0)
-    source = models.ForeignKey(TEvent, null=True)
-    trained = models.BooleanField(default=False)
-    created = models.DateTimeField('date created', auto_now_add=True)
-    class_index_to_string = JSONField(null=True,blank=True)
-
-    def create_directory(self,create_subdirs=True):
-        try:
-            os.mkdir('{}/detectors/{}'.format(settings.MEDIA_ROOT, self.pk))
-        except:
-            pass
-
-    def get_model_path(self,root_dir=None):
-        if root_dir is None:
-            root_dir = settings.MEDIA_ROOT
-        return "{}/detectors/{}/{}".format(root_dir,self.pk,self.model_filename)
-
-    def get_yolo_args(self):
-        model_dir = "{}/detectors/{}/".format(settings.MEDIA_ROOT, self.pk)
-        class_names = {k: v for k, v in json.loads(self.class_names)}
-        args = {'root_dir': model_dir,
-                'detector_pk': self.pk,
-                'class_names':{i: k for k, i in class_names.items()}
-                }
-        return args
-
-class IndexerQuery(models.Model):
-    parent_query = models.ForeignKey(DVAPQL)
-    created = models.DateTimeField('date created', auto_now_add=True)
-    count = models.IntegerField(default=20)
-    algorithm = models.CharField(max_length=500,default="")
-    indexer = models.ForeignKey(Indexer,null=True)
-    excluded_index_entries_pk = ArrayField(models.IntegerField(), default=[])
-    vector = models.BinaryField(null=True)
-    results = models.BooleanField(default=False)
-    metadata = models.TextField(default="")
-    source_filter_json = JSONField(blank=True,null=True)
-    approximate = models.BooleanField(default=False)
-    user = models.ForeignKey(User, null=True)
-
-    def path(self,media_root=None):
-        if media_root:
-            return "{}/queries/{}_{}.png".format(media_root, self.algorithm, self.parent_query.pk)
-        else:
-            return "{}/queries/{}_{}.png".format(settings.MEDIA_ROOT, self.algorithm, self.parent_query.pk)
 
 
 class Frame(models.Model):
@@ -260,12 +181,6 @@ class Frame(models.Model):
 
     def __unicode__(self):
         return u'{}:{}'.format(self.video_id, self.frame_index)
-
-    def path(self,media_root=None):
-        if media_root:
-            return "{}/{}/frames/{}.jpg".format(media_root, self.video_id, self.frame_index)
-        else:
-            return "{}/{}/frames/{}.jpg".format(settings.MEDIA_ROOT,self.video_id,self.frame_index)
 
 
 class Segment(models.Model):
@@ -288,18 +203,6 @@ class Segment(models.Model):
     def __unicode__(self):
         return u'{}:{}'.format(self.video_id, self.segment_index)
 
-    def path(self, media_root=None):
-        if media_root:
-            return "{}/{}/segments/{}.mp4".format(media_root, self.video_id, self.segment_index)
-        else:
-            return "{}/{}/segments/{}.mp4".format(settings.MEDIA_ROOT, self.video_id, self.segment_index)
-
-    def framelist_path(self, media_root=None):
-        if media_root:
-            return "{}/{}/segments/{}.txt".format(media_root, self.video_id, self.segment_index)
-        else:
-            return "{}/{}/segments/{}.txt".format(settings.MEDIA_ROOT, self.video_id, self.segment_index)
-
 
 class Region(models.Model):
     """
@@ -318,22 +221,25 @@ class Region(models.Model):
         (SEGMENTATION, 'Segmentation'),
         (TRANSFORM, 'Transform'),
     )
-    region_type = models.CharField(max_length=1,choices=REGION_TYPES,db_index=True)
+    region_type = models.CharField(max_length=1,choices=REGION_TYPES)
     video = models.ForeignKey(Video)
     user = models.ForeignKey(User,null=True)
     frame = models.ForeignKey(Frame,null=True)
     event = models.ForeignKey(TEvent, null=True)  # TEvent that created this region
     parent_frame_index = models.IntegerField(default=-1)
     parent_segment_index = models.IntegerField(default=-1,null=True)
-    text = models.TextField(default="")
-    metadata = JSONField(blank=True,null=True)
+
+    metadata_text = models.TextField(default="")
+    metadata_json = models.TextField(default="")
     full_frame = models.BooleanField(default=False)
     x = models.IntegerField(default=0)
     y = models.IntegerField(default=0)
     h = models.IntegerField(default=0)
     w = models.IntegerField(default=0)
-    polygon_points = JSONField(blank=True,null=True)
+    polygon_points_json = models.TextField(default="[]")
     created = models.DateTimeField('date created', auto_now_add=True)
+    vdn_dataset = models.ForeignKey(VDNDataset,null=True)
+    vdn_key = models.IntegerField(default=-1)
     object_name = models.CharField(max_length=100)
     confidence = models.FloatField(default=0.0)
     materialized = models.BooleanField(default=False)
@@ -352,21 +258,9 @@ class Region(models.Model):
             self.parent_segment_index = self.frame.segment_index
         super(Region, self).save(*args, **kwargs)
 
-    def path(self,media_root=None):
-        if media_root:
-            return "{}/{}/regions/{}.jpg".format(media_root, self.video_id, self.pk)
-        else:
-            return "{}/{}/regions/{}.jpg".format(settings.MEDIA_ROOT, self.video_id, self.pk)
-
-    def frame_path(self,media_root=None):
-        if media_root:
-            return "{}/{}/frames/{}.jpg".format(media_root, self.video_id, self.parent_frame_index)
-        else:
-            return "{}/{}/frames/{}.jpg".format(settings.MEDIA_ROOT, self.video_id, self.parent_frame_index)
-
 
 class QueryResults(models.Model):
-    query = models.ForeignKey(DVAPQL)
+    query = models.ForeignKey(Query)
     indexerquery = models.ForeignKey(IndexerQuery)
     video = models.ForeignKey(Video)
     frame = models.ForeignKey(Frame)
@@ -374,6 +268,20 @@ class QueryResults(models.Model):
     rank = models.IntegerField()
     algorithm = models.CharField(max_length=100)
     distance = models.FloatField(default=0.0)
+
+
+class FederatedQueryResults(models.Model):
+    query = models.ForeignKey(Query)
+    rank = models.IntegerField()
+    user = models.ForeignKey(User)
+    server_name = models.CharField(max_length=100)
+    algorithm = models.CharField(max_length=100)
+    distance = models.FloatField(default=0.0)
+    results_metadata = models.TextField(default="")
+    results_available = models.BooleanField(default=False)
+    result_image_data = models.BinaryField(null=True)
+
+
 
 
 class ClusterCodes(models.Model):
@@ -397,7 +305,7 @@ class IndexEntries(models.Model):
     features_file_name = models.CharField(max_length=100)
     entries_file_name = models.CharField(max_length=100)
     algorithm = models.CharField(max_length=100)
-    indexer = models.ForeignKey(Indexer, null=True)
+    indexer = models.ForeignKey(CustomIndexer, null=True)
     detection_name = models.CharField(max_length=100)
     count = models.IntegerField()
     approximate = models.BooleanField(default=False)
@@ -413,6 +321,23 @@ class IndexEntries(models.Model):
         return "{} in {} index by {}".format(self.detection_name, self.algorithm, self.video.name)
 
 
+class CustomDetector(models.Model):
+    name = models.CharField(max_length=100)
+    algorithm = models.CharField(max_length=100,default="")
+    model_filename = models.CharField(max_length=200,default="")
+    vdn_detector = models.ForeignKey(VDNDetector,null=True)
+    arguments = models.TextField(default="")
+    phase_1_log = models.TextField(default="")
+    phase_2_log = models.TextField(default="")
+    class_distribution = models.TextField(default="")
+    class_names = models.TextField(default="")
+    frames_count = models.IntegerField(default=0)
+    boxes_count = models.IntegerField(default=0)
+    source = models.ForeignKey(TEvent, null=True)
+    trained = models.BooleanField(default=False)
+    created = models.DateTimeField('date created', auto_now_add=True)
+
+
 class Tube(models.Model):
     """
     A tube is a collection of sequential frames / regions that track a certain object
@@ -426,98 +351,26 @@ class Tube(models.Model):
     end_frame = models.ForeignKey(Frame,null=True,related_name="end_frame")
     start_region = models.ForeignKey(Region,null=True,related_name="start_region")
     end_region = models.ForeignKey(Region,null=True,related_name="end_region")
-    text = models.TextField(default="")
-    metadata = JSONField(blank=True,null=True)
+    metadata_text = models.TextField(default="")
+    metadata_json = models.TextField(default="")
     source = models.ForeignKey(TEvent,null=True)
 
 
-class Label(models.Model):
-    name = models.CharField(max_length=200)
-    set = models.CharField(max_length=200,default="")
-    metadata = JSONField(blank=True,null=True)
-    text = models.TextField(null=True,blank=True)
-    created = models.DateTimeField('date created', auto_now_add=True)
-
-    class Meta:
-        unique_together = (("name", "set"),)
-
-    def __unicode__(self):
-        return u'{}:{}'.format(self.name, self.set)
-
-
-class FrameLabel(models.Model):
-    video = models.ForeignKey(Video,null=True)
-    frame_index = models.IntegerField(default=-1)
-    segment_index = models.IntegerField(null=True)
-    frame = models.ForeignKey(Frame)
-    label = models.ForeignKey(Label)
-    event = models.ForeignKey(TEvent,null=True)
-
-    def clean(self):
-        if self.frame_index == -1 or self.frame_index is None:
-            self.frame_index = self.frame.frame_index
-        if self.segment_index == -1 or self.segment_index is None:
-            self.segment_index = self.frame.segment_index
-
-    def save(self, *args, **kwargs):
-        if self.frame_index == -1 or self.frame_index is None:
-            self.frame_index = self.frame.frame_index
-        if self.segment_index == -1 or self.segment_index is None:
-            self.segment_index = self.frame.segment_index
-        super(FrameLabel, self).save(*args, **kwargs)
-
-
-class RegionLabel(models.Model):
-    video = models.ForeignKey(Video,null=True)
-    frame = models.ForeignKey(Frame,null=True)
-    frame_index = models.IntegerField(default=-1)
-    segment_index = models.IntegerField(null=True)
-    region = models.ForeignKey(Region)
-    label = models.ForeignKey(Label)
-    event = models.ForeignKey(TEvent,null=True)
-
-    def clean(self):
-        if self.frame_index == -1 or self.frame_index is None:
-            self.frame_index = self.frame.frame_index
-        if self.segment_index == -1 or self.segment_index is None:
-            self.segment_index = self.frame.segment_index
-
-    def save(self, *args, **kwargs):
-        if self.frame_index == -1 or self.frame_index is None:
-            self.frame_index = self.frame.frame_index
-        if self.segment_index == -1 or self.segment_index is None:
-            self.segment_index = self.frame.segment_index
-        super(RegionLabel, self).save(*args, **kwargs)
-
-
-class SegmentLabel(models.Model):
-    video = models.ForeignKey(Video,null=True)
-    segment_index = models.IntegerField(default=-1)
-    segment = models.ForeignKey(Segment)
-    label = models.ForeignKey(Label)
-    event = models.ForeignKey(TEvent, null=True)
-
-    def clean(self):
-        if self.segment_index == -1 or self.segment_index is None:
-            self.segment_index = self.segment.segment_index
-
-    def save(self, *args, **kwargs):
-        if self.segment_index == -1 or self.segment_index is None:
-            self.segment_index = self.segment.segment_index
-        super(SegmentLabel, self).save(*args, **kwargs)
-
-
-class TubeLabel(models.Model):
-    video = models.ForeignKey(Video,null=True)
-    tube = models.ForeignKey(Tube)
-    label = models.ForeignKey(Label)
-    event = models.ForeignKey(TEvent, null=True)
-
-
-class VideoLabel(models.Model):
+class AppliedLabel(models.Model):
+    UI = 'UI'
+    DIRECTORY = 'DR'
+    ALGO = 'AG'
+    VDN = "VD"
+    SOURCE_CHOICES = (
+    (UI, 'User Interface'), (DIRECTORY, 'Directory Name'), (ALGO, 'Algorithm'), (VDN, "Visual Data Network"))
     video = models.ForeignKey(Video)
-    label = models.ForeignKey(Label)
-    event = models.ForeignKey(TEvent, null=True)
+    tube = models.ForeignKey(Tube,null=True)
+    segment = models.ForeignKey(Segment,null=True)
+    frame = models.ForeignKey(Frame,null=True)
+    region = models.ForeignKey(Region,null=True)
+    label_name = models.CharField(max_length=200)
+    source = models.CharField(max_length=2, choices=SOURCE_CHOICES, default=UI)
+    created = models.DateTimeField('date created', auto_now_add=True)
 
 
 class DeletedVideo(models.Model):
@@ -525,34 +378,8 @@ class DeletedVideo(models.Model):
     description = models.TextField(default="")
     uploader = models.ForeignKey(User,null=True,related_name="user_uploader")
     url = models.TextField(default="")
-    deleter = models.ForeignKey(User,related_name="user_deleter",null=True)
+    deleter = models.ForeignKey(User,related_name="user_deleter")
     original_pk = models.IntegerField()
 
     def __unicode__(self):
         return u'Deleted {}'.format(self.name)
-
-
-class ManagementAction(models.Model):
-    parent_task = models.CharField(max_length=500, default="")
-    op = models.CharField(max_length=500, default="")
-    host = models.CharField(max_length=500, default="")
-    message = models.TextField()
-    created = models.DateTimeField('date created', auto_now_add=True)
-
-
-class StoredDVAPQL(models.Model):
-    """
-    Stored processes
-    """
-    SCHEDULE = 'S'
-    PROCESS = 'V'
-    QUERY = 'Q'
-    TYPE_CHOICES = ((SCHEDULE, 'Schedule'), (PROCESS, 'Process'), (QUERY, 'Query'))
-    process_type = models.CharField(max_length=1, choices=TYPE_CHOICES, default=QUERY,db_index=True)
-    created = models.DateTimeField('date created', auto_now_add=True)
-    creator = models.ForeignKey(User, null=True, related_name="script_creator")
-    name = models.CharField(max_length=300,default="")
-    description = models.TextField(blank=True,default="")
-    script = JSONField(blank=True, null=True)
-
-

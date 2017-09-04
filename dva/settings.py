@@ -11,12 +11,13 @@ https://docs.djangoproject.com/en/1.10/ref/settings/
 """
 
 import os, dj_database_url, sys
-
+from .worker_config import *
+DJANGO_DEBUG = True
 VDN_ENABLE = 'VDN_ENABLE' in os.environ
 DVA_PRIVATE_ENABLE = 'DVA_PRIVATE_ENABLE' in os.environ
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEDIA_BUCKET = os.environ.get('MEDIA_BUCKET', None)
+MEDIA_BUCKET = os.environ.get('MEDIA_BUCKET', '')
 HEROKU_DEPLOY = 'HEROKU_DEPLOY' in os.environ
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/1.10/howto/deployment/checklist/
@@ -35,7 +36,7 @@ INTERNAL_IPS = ['localhost','127.0.0.1']
 if 'DISABLE_DEBUG' in os.environ or HEROKU_DEPLOY:
     DEBUG = False
 else:
-    DEBUG = True
+    DEBUG = True # change
 
 if sys.platform == 'darwin':
     MACOS = True
@@ -77,44 +78,55 @@ INSTALLED_APPS = [
                      'django_filters',
                      'vdnapp',
                      'crispy_forms',
-                     'rest_framework.authtoken',
-                     'django_celery_beat'
-                 ] + (['dvap', ] if DVA_PRIVATE_ENABLE else [])+ (['debug_toolbar'] if MACOS and DEBUG else [])
+                     'rest_framework.authtoken'
+                 ] + (['dvap', ] if DVA_PRIVATE_ENABLE else [])+ (['debug_toolbar','explorer',] if MACOS and DEBUG else [])
 
-
-MIDDLEWARE_CLASSES = [
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-]
-
-if MACOS and DEBUG:
-    MIDDLEWARE_CLASSES = ['debug_toolbar.middleware.DebugToolbarMiddleware',] +MIDDLEWARE_CLASSES
-CORS_ORIGIN_ALLOW_ALL = True
-CORS_ALLOW_METHODS = ('POST', 'GET',)
-CORS_ALLOW_CREDENTIALS = True
-if VDN_ENABLE and HEROKU_DEPLOY:
+if VDN_ENABLE:
+    MIDDLEWARE_CLASSES = [
+        'corsheaders.middleware.CorsMiddleware',
+        'django.middleware.security.SecurityMiddleware',
+        'django.contrib.sessions.middleware.SessionMiddleware',
+        'django.middleware.common.CommonMiddleware',
+        'django.middleware.csrf.CsrfViewMiddleware',
+        'django.contrib.auth.middleware.AuthenticationMiddleware',
+        'django.contrib.auth.middleware.SessionAuthenticationMiddleware',
+        'django.contrib.messages.middleware.MessageMiddleware',
+        'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    ]
+    if MACOS and DEBUG:
+        MIDDLEWARE_CLASSES = ['debug_toolbar.middleware.DebugToolbarMiddleware',] +MIDDLEWARE_CLASSES
+    CORS_ORIGIN_ALLOW_ALL = True
     CORS_URLS_REGEX = r'^vdn/api/.*$'
+    CORS_ALLOW_METHODS = ('POST', 'GET',)
+    CORS_ALLOW_CREDENTIALS = True
+    REST_FRAMEWORK = {
+        'PAGE_SIZE': 10,
+        'DEFAULT_FILTER_BACKENDS': ('django_filters.rest_framework.DjangoFilterBackend',),
+        'DEFAULT_PERMISSION_CLASSES': (
+            'rest_framework.permissions.IsAuthenticatedOrReadOnly',
+        ),
+        'DEFAULT_AUTHENTICATION_CLASSES': (
+            'rest_framework.authentication.BasicAuthentication',
+            'rest_framework.authentication.SessionAuthentication',
+            'rest_framework.authentication.TokenAuthentication',
+        )
+    }
 else:
-    CORS_URLS_REGEX = r'^api/.*$'
-REST_FRAMEWORK = {
-    'PAGE_SIZE': 10,
-    'DEFAULT_FILTER_BACKENDS': ('django_filters.rest_framework.DjangoFilterBackend',),
-    'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticatedOrReadOnly',
-    ),
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework.authentication.BasicAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
-        'rest_framework.authentication.TokenAuthentication',
-    )
-}
+    MIDDLEWARE = [
+        'django.middleware.security.SecurityMiddleware',
+        'django.contrib.sessions.middleware.SessionMiddleware',
+        'django.middleware.common.CommonMiddleware',
+        'django.middleware.csrf.CsrfViewMiddleware',
+        'django.contrib.auth.middleware.AuthenticationMiddleware',
+        'django.contrib.messages.middleware.MessageMiddleware',
+        'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    ]
+    if MACOS and DEBUG:
+        MIDDLEWARE = ['debug_toolbar.middleware.DebugToolbarMiddleware',] + MIDDLEWARE
+    REST_FRAMEWORK = {
+        'PAGE_SIZE': 10,
+        'DEFAULT_FILTER_BACKENDS': ('django_filters.rest_framework.DjangoFilterBackend',),
+    }
 
 PATH_PROJECT = os.path.realpath(os.path.dirname(__file__))
 
@@ -233,6 +245,12 @@ else:
     STATIC_URL = '/static/'
     MEDIA_ROOT = '/Users/aub3/media/' if sys.platform == 'darwin' else os.path.join(PROJECT_ROOT, 'media')
     MEDIA_URL = '/media/'
+    for create_dirname in ['queries', 'exports', 'detectors','indexers','annotators']:
+        if not os.path.isdir("{}/{}".format(MEDIA_ROOT, create_dirname)):
+            try:
+                os.mkdir("{}/{}".format(MEDIA_ROOT, create_dirname))
+            except:
+                pass
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 26214400
 

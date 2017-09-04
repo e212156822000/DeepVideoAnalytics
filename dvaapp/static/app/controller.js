@@ -410,10 +410,6 @@ $scope.toggle_visibility = function(box_index){
     canvas.deactivateAll().renderAll();
 };
 
-$scope.results_available = function(){
-    return (_.size($scope.results) > 0);
-};
-
 $scope.toggle_all = function(){
     for(box_index in $scope.existing_boxes)
     {
@@ -531,8 +527,8 @@ $scope.submit_annotation = function(box_id){
             'high_level':false,
             'tags': $('#' + box.id + '_tags').val(),
             'object_name': $('#' + box.id + '_object_name').val(),
-            'text': $('#' + box.id + '_text').val(),
-            'metadata': $('#' + box.id + '_metadata').val()
+            'metadata_text': $('#' + box.id + '_metadata_text').val(),
+            'metadata_json': $('#' + box.id + '_metadata_json').val()
         },
         dataType: 'json',
         async: true,

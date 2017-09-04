@@ -19,7 +19,7 @@
         <div class="inner">
         <form id="image-form" style="width:100%;"  onsubmit="return false;">
             <input type='file'  id='imgfile' style="display:none"/>
-            <a type='button' class="btn btn-primary btn-move" id='btnLoad' ng-click='load_image();'><i class="fa fa-image"></i>&nbsp;&nbsp;Add image</a>
+            <a type='button' class="btn btn-primary btn-move" id='btnLoad' ng-click='load_image();'><i class="fa fa-image"></i>&nbsp;&nbsp;Add images</a>
         </form>
         <button type="button" class="btn btn-info  btn-move"  id="reset_zoom" ng-click="resetZoom()"><i class="fa fa-refresh"></i>&nbsp;Reset Zoom</button>
         <button type="button" class="btn btn-danger  btn-move"  id="clear" ng-click="confirmClear()"><i class="fa fa-trash"></i>&nbsp;&nbsp;Clean editor</button>
@@ -139,7 +139,7 @@
                                     <div class="row">
                                     <div class="col-xs-6">
                                         <div class="form-group">
-                                        <label for="nth">Extract every n<sup>th</sup> frame from video<input id="nth" class="form-control" name="nth" type="number" value="{{ rate }}"></label>
+                                        <label for="nth">Extract every n<sup>th</sup> frame from video<input id="nth" class="form-control" name="nth" type="number" value="30"></label>
                                         </div>
                                     </div>
                                     <div class="col-xs-6">
@@ -222,25 +222,54 @@
                     </div>
                 </div>
                 <div class="box box-primary">
-                    <div class="box-body text-center">
-                        <div class="row">
-                            <div class="col-xs-7"><a class="btn btn-primary" href="/stored_process/"><i class="fa fa-play"></i> Run custom DVAPQL script</a></div>
-                            <div class="col-xs-5"><a class="btn btn-primary" href="/process/"><i class="fa fa-list"></i> Monitor processes</a></div>
-                        </div>
-                    </div>
-                </div>
-                <div class="box box-primary">
                     <div class="box-header with-border">
-                        <div class="row">
-                            <div class="col-xs-9">
-                                <h4>Tasks status</h4>
-                            </div>
-                            <div class="col-xs-3">
-                                <a class="btn btn-primary btn-block" href="{% url 'tasks' %}" style="margin: 10px auto" > <i class="fa fa-list"></i> All tasks</a>
-                            </div>
-                        </div>
+                        <h4 style="margin-top:10px;display:inline-block">Tasks status</h4>
+                        <a class="btn btn-primary" style="float:right" data-toggle="modal" data-target="#tasksubmit" href="#" ><i class="fa fa-play"></i> Manually run task</a>
+
                     </div>
                     <div class="box-body">
+                        <div class="modal fade" tabindex="-1" role="dialog" id="tasksubmit">
+                        <div class="modal-dialog" role="document">
+                            <div class="modal-content">
+                            <div class="modal-header">
+                                <button type="button" class="close" data-dismiss="modal" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                                <h4 class="modal-title">Submit task manually</h4></div>
+                            <div class="modal-body" style="text-align:left">
+                            <form action="/video_send_task" method="POST" >
+                            <div class="row">
+                            <div class="col-sm-12">
+                                <div class="form-group">
+                                    <label for="task_name">Task</label>
+                                    <select class="js-example-basic" id="task_name" name="task_name" style="width:100%">
+                                    {% for v in manual_tasks %}
+                                        <option value="{{ v }}">{{ v }}</option>
+                                    {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-sm-12"><div class="form-group">
+                                    <label for="video_name">Video</label>
+                                    <select class="js-example-basic" id="video_name" name="video_id" style="width:100%">
+                                    {% for v in videos %}
+                                        <option value="{{ v.pk }}">{{ v.name }}</option>
+                                    {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="col-sm-9">
+                                <div class="form-group">
+                                    <label for="arguments_json">Arguments as JSON</label><textarea rows="2" class="form-control" name="arguments_json" id="arguments_json">{}</textarea>
+                                </div>
+                            </div>
+                            <div class="col-sm-3 text-center"><button class="form-actions btn btn-primary" style="margin-top:25px"  type="submit"><i class="fa fa-send"></i> Submit</button></div>
+                            </div>
+                        {% csrf_token %}
+                        </form>
+                        </div>
+                        </div>
+                        </div>
+                        </div>
+
                         <div class="row text-center">
                             <div class="col-xs-3">
                                 <a class="btn btn-warning" href="/tasks/pending/" style="margin: 10px auto" > <i class="fa fa-clock-o"></i> {{ pending_tasks }} pending</a>
@@ -273,18 +302,18 @@
                                 <a class="btn" href="/queries/" style="margin: 10px auto" > <i class="fa fa-search"></i> {{ query_count }} queries</a>
                             </div>
                             <div class="col-xs-3">
-                                <a class="btn" href="/models/" style="margin: 10px auto" > <i class="fa fa-list"></i> {{ index_entries_count }} indexes</a>
+                                <a class="btn" href="/indexes/" style="margin: 10px auto" > <i class="fa fa-list"></i> {{ index_entries_count }} indexes</a>
                             </div>
                         </div>
                         <div class="row">
                             <div class="col-xs-3">
-                                <a class="btn" href="/models/" style="margin: 10px auto" > <i class="fa fa-square"></i> {{ custom_detector_count }} Trained detectors</a>
+                                <a class="btn" href="/detectors/" style="margin: 10px auto" > <i class="fa fa-square"></i> {{ custom_detector_count }} Trained detectors</a>
                             </div>
                             <div class="col-xs-3">
                                 <a class="btn" href="/tasks/" style="margin: 10px auto" > <i class="fa fa-clock-o"></i> {{ task_events_count }}  tasks </a>
                             </div>
                             <div class="col-xs-3">
-                                <a class="btn" href="/process/" style="margin: 10px auto" > <i class="fa fa-list"></i> {{ process_count }} processes</a>
+                                <a class="btn" href="/external/" style="margin: 10px auto" > <i class="fa fa-globe"></i> {{ external_datasets_count }} VDN datasets</a>
                             </div>
                             <div class="col-xs-3">
                                 <a class="btn" href="/external/" style="margin: 10px auto" > <i class="fa fa-globe"></i> {{ external_servers_count }} VDN servers</a>
@@ -307,12 +336,8 @@
         <div ng-repeat="item in entries" class="col-lg-3 col-sm-3 col-xs-6" >
             <div class="box box-primary">
                 <div class="box-header with-border">
-                    <h4>{[ item.rank ]} {[ item.result_type ]}
-                        <input type="checkbox" class="selection_box pull-right" id="cbox_{[ item.frame_id]}" name="cbox_{[ item.frame_id]}" />
-                    </h4>
+                    <h4>{[ item.rank ]} {[ item.result_type ]}</h4>
                     <p class=""><a href="/videos/{[ item.video_id ]}"> {[ item.video_name ]} </a> at {[ item.frame_index ]}</p>
-                    <div class="text-center">
-                    </div>
                 </div>
                 <div class="box-body" style="height:220px">
                     <a href="/frames/{[ item.frame_id ]}"><img class="img-responsive img-bordered-sm" style="max-height:200px;margin-left:auto;margin-right:auto"  ng-src="{[ item.url ]}">
@@ -320,14 +345,6 @@
                 </div>
             </div>
         </div>
-        </div>
-    </div>
-    <div class="col-lg-offset-2 col-lg-8" ng-show="results_available()">
-        <div class="box">
-        <div class="box-body"><div class="row">
-            <div class="col-lg-10 text-center"><textarea rows="1"  style="width:95%;margin: auto" placeholder="comma separated list of labels"></textarea></div>
-            <div class="col-lg-2 text-center"><a ng-click="label_selected" class="btn btn-primary" >Label selected</a></div>
-        </div></div>
         </div>
     </div>
 </div>
@@ -351,6 +368,8 @@
     indexer_selector.select2({theme: "bootstrap"});
     var excluded_index_entries = $("#excluded_index_entries");
     excluded_index_entries.select2({theme: "bootstrap"});
+    var task_name = $("#task_name");
+    task_name.select2({theme: "bootstrap"});
     var video_name = $("#video_name");
     video_name.select2({theme: "bootstrap"});
     </script>

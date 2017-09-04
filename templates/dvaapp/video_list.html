@@ -43,6 +43,7 @@
                     <th class="text-center">width</th>
                     <th class="text-center">created</th>
                     <th class="text-center">youtube</th>
+                    <th class="text-center">VDN Source</th>
                     <th class="text-center">view</th>
                 </tr>
                 </thead>
@@ -59,6 +60,7 @@
                         <td class="text-right">{{ v.width }} </td>
                         <td class="text-center">{{ v.created }}</td>
                         <td class="text-center">{% if v.youtube_video %}<a href="{{ v.url }}" target="_blank">youtube link</a>{% endif %}</td>
+                        <td class="text-center">{% if v.vdn_dataset %}<a href="{{ v.vdn_dataset.url }}" target="_blank">source</a>{% endif %}</td>
                         <td class="text-center"><a  href="/videos/{{ v.pk }}">view</a></td>
                     </tr>
                     {% endif %}
@@ -87,13 +89,15 @@
                                 <td>{{ e.video.name }}</td>
                                 <td>{{ e.started }}</td>
                                 <td class="text-center">{{ e.completed }}</td>
-                                <td class="text-center">
-                                    {% if e.arguments.file_name %}
-                                        <a href="{{ MEDIA_URL }}exports/{{ e.arguments.file_name }}">click to download</a>
-                                    {% elif e.completed %}
-                                        s3://{{ e.arguments.bucket }}/{{ e.arugments.key }}
-                                    {% endif %}
-                                </td>
+                                <td class="text-center">{% if e.completed %}<a href="{{ MEDIA_URL }}exports/{{ e.file_name }}">click to download</a>{% endif %}</td>
+                            </tr>
+                        {% endfor %}
+                        {% for e in s3_exports %}
+                            <tr>
+                                <td>{{ e.video.name }}</td>
+                                <td>{{ e.started }}</td>
+                                <td class="text-center">{{ e.completed }}</td>
+                                <td class="text-center">{{ e.region }} / {{ e.bucket }} / {{ e.key }}</td>
                             </tr>
                         {% endfor %}
                         </tbody>

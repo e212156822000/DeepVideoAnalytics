@@ -1,37 +1,6 @@
 from django.contrib import admin
-from .models import Video, Frame, TEvent, IndexEntries, QueryResults, DVAPQL, VDNServer,\
-    ClusterCodes, Clusters, Region, Tube, Detector, Segment, IndexerQuery, DeletedVideo, \
-    VideoLabel, FrameLabel, RegionLabel, TubeLabel, SegmentLabel, Label, ManagementAction, StoredDVAPQL, Analyzer, Indexer
-
-
-@admin.register(Label)
-class LabelAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(VideoLabel)
-class VideoLabelAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(FrameLabel)
-class FrameLabelAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(SegmentLabel)
-class SegmentLabelAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(RegionLabel)
-class RegionLabelAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(TubeLabel)
-class TubeLabelAdmin(admin.ModelAdmin):
-    pass
+from .models import Video, Frame, TEvent, IndexEntries, QueryResults, Query, AppliedLabel, VDNServer,\
+    VDNDataset, ClusterCodes, Clusters, Region, Tube, CustomDetector, Segment, IndexerQuery, DeletedVideo
 
 
 @admin.register(IndexerQuery)
@@ -41,6 +10,11 @@ class IndexerQueryAdmin(admin.ModelAdmin):
 
 @admin.register(Segment)
 class SegmentAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(AppliedLabel)
+class AppliedLabelAdmin(admin.ModelAdmin):
     pass
 
 
@@ -64,8 +38,8 @@ class QueryResultsAdmin(admin.ModelAdmin):
     pass
 
 
-@admin.register(DVAPQL)
-class DVAPQLAdmin(admin.ModelAdmin):
+@admin.register(Query)
+class QueryAdmin(admin.ModelAdmin):
     pass
 
 @admin.register(Frame)
@@ -80,6 +54,11 @@ class IndexEntriesAdmin(admin.ModelAdmin):
 
 @admin.register(VDNServer)
 class VDNServerAdmin(admin.ModelAdmin):
+    pass
+
+
+@admin.register(VDNDataset)
+class VDNDatasetAdmin(admin.ModelAdmin):
     pass
 
 
@@ -103,26 +82,7 @@ class TubeAdmin(admin.ModelAdmin):
     pass
 
 
-@admin.register(Detector)
-class DetectorAdmin(admin.ModelAdmin):
+@admin.register(CustomDetector)
+class CustomDetectorAdmin(admin.ModelAdmin):
     pass
 
-
-@admin.register(Analyzer)
-class AnalyzerAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(Indexer)
-class IndexerAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(ManagementAction)
-class ManagementActionAdmin(admin.ModelAdmin):
-    pass
-
-
-@admin.register(StoredDVAPQL)
-class StoredDVAPQLAdmin(admin.ModelAdmin):
-    pass

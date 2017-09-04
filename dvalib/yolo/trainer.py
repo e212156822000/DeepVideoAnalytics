@@ -14,14 +14,14 @@ DEFAULT_ANCHORS = [(0.57273, 0.677385), (1.87446, 2.06253), (3.33843, 5.47434), 
 
 class YOLOTrainer(object):
 
-    def __init__(self,images,boxes,args,test_mode=False):
+    def __init__(self,images,boxes,class_names,args,test_mode=False):
         self.images = images
         self.args = args
         self.boxes = boxes
         self.processed_boxes = None
         self.processed_images = None
         self.detectors_mask, self.matching_true_boxes = None, None
-        self.class_names = args['class_names']
+        self.class_names = class_names
         self.anchors = np.array(args['anchors'] if 'anchors' in args else DEFAULT_ANCHORS)
         self.validation_split = args['validation_split'] if 'validation_split' in args else 0.1
         self.model_body = None
@@ -32,7 +32,7 @@ class YOLOTrainer(object):
         if test_mode:
             self.create_model(load_pretrained=False,freeze_body=False)
         else:
-            self.base_model = args['base_model']
+            self.base_model = args['base_model'] if 'base_model' in args else "dvalib/yolo/model_data/yolo.h5"
             self.process_data()
             self.get_detector_mask()
             self.create_model()
@@ -183,35 +183,4 @@ class YOLOTrainer(object):
                     results.append((i_path,box_class,score,top, left, bottom, right))
             else:
                 logging.warning("skipping {} contains less than 3 channels".format(i_path))
-        return results
-
-    def load(self):
-        weights_name = '{}/phase_2_best.h5'.format(self.root_dir)
-        self.model_body.load_weights(weights_name)
-        yolo_outputs = yolo_head(self.model_body.output, self.anchors, len(self.class_names))
-        self.input_image_shape = K.placeholder(shape=(2,))
-        self.tfboxes, self.tfscores, self.tfclasses = yolo_eval(yolo_outputs, self.input_image_shape, score_threshold=0.5, iou_threshold=0)
-        self.sess = K.get_session()
-
-    def apply(self,path,min_score):
-        im = Image.open(path)
-        image_data = np.array(im.resize((416, 416), Image.BICUBIC), dtype=np.float) / 255.
-        image_data = np.expand_dims(image_data, 0)
-        feed_dict = {self.model_body.input: image_data, self.input_image_shape: [im.size[1], im.size[0]],
-                     K.learning_phase(): 0}
-        out_boxes, out_scores, out_classes = self.sess.run([self.tfboxes, self.tfscores, self.tfclasses],
-                                                           feed_dict=feed_dict)
-        results = []
-        for i, c in list(enumerate(out_classes)):
-            box_class = self.class_names[c]
-            box = out_boxes[i]
-            score = out_scores[i]
-            top, left, bottom, right = box
-            top = max(0, np.floor(top + 0.5).astype('int32'))
-            left = max(0, np.floor(left + 0.5).astype('int32'))
-            bottom = min(im.size[1], np.floor(bottom + 0.5).astype('int32'))
-            right = min(im.size[0], np.floor(right + 0.5).astype('int32'))
-            if score > min_score:
-                results.append({'x': left,'y':top,'w':right - left,'h':bottom - top,
-                                'score': score,'object_name':box_class})
         return results

@@ -1,16 +1,14 @@
 from django.shortcuts import render, redirect
 from django.conf import settings
-from django.http import JsonResponse
+from django.http import JsonResponse , HttpResponse
 import requests
 import glob
 import json
 from django.views.generic import ListView, DetailView
 from .forms import UploadFileForm, YTVideoForm, AnnotationForm
-from .models import Video, Frame, DVAPQL, QueryResults, TEvent, IndexEntries, Region, VDNServer, \
-    ClusterCodes, Clusters,  Tube, Detector,  Segment, FrameLabel, SegmentLabel, \
-    VideoLabel, RegionLabel, TubeLabel, Label, ManagementAction, StoredDVAPQL, Analyzer, Indexer
+from .models import Video, Frame, Query, QueryResults, TEvent, IndexEntries, VDNDataset, Region, VDNServer, \
+    ClusterCodes, Clusters, AppliedLabel, Tube, CustomDetector, VDNDetector, Segment, DeletedVideo
 from dva.celery import app
-from dvaapp.operations import queuing
 import serializers
 from rest_framework import viewsets, mixins
 from django.contrib.auth.models import User
@@ -18,24 +16,20 @@ from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticate
 from django.db.models import Count
 import math
 from django.db.models import Max
-from shared import handle_uploaded_file, create_annotation, handle_video_url, pull_vdn_list, \
+from shared import handle_uploaded_file, create_annotation, create_child_vdn_dataset, \
+    create_root_vdn_dataset, handle_youtube_video, pull_vdn_list, \
     import_vdn_dataset_url, create_detector_dataset, import_vdn_detector_url, refresh_task_status, \
-    delete_video_object
-from operations.processing import DVAPQLProcess
+    delete_video_object,get_queue_name
+from operations.query_processing import QueryProcessing
 from django.contrib.auth.decorators import user_passes_test,login_required
 from django.utils.decorators import method_decorator
 from django.contrib.auth.mixins import UserPassesTestMixin
-from django_celery_results.models import TaskResult
-from rest_framework.authtoken.models import Token
 import logging
-import defaults
-
 try:
     from django.contrib.postgres.search import SearchVector
 except ImportError:
     SearchVector = None
     logging.warning("Could not load Postgres full text search")
-from examples import EXAMPLES
 
 
 class LoginRequiredMixin(object):
@@ -43,13 +37,8 @@ class LoginRequiredMixin(object):
     def dispatch(self, *args, **kwargs):
         return super(LoginRequiredMixin, self).dispatch(*args, **kwargs)
 
-
 def user_check(user):
     return user.is_authenticated or settings.AUTH_DISABLED
-
-
-def force_user_check(user):
-    return user.is_authenticated
 
 
 class UserViewSet(viewsets.ReadOnlyModelViewSet):
@@ -64,65 +53,11 @@ class VideoViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = serializers.VideoSerializer
 
 
-class AnalyzerViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = Analyzer.objects.all()
-    serializer_class = serializers.AnalyzerSerializer
-
-
-class IndexerViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = Indexer.objects.all()
-    serializer_class = serializers.IndexerSerializer
-
-
-class DetectorViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = Detector.objects.all()
-    serializer_class = serializers.DetectorSerializer
-
-
 class FrameViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
     queryset = Frame.objects.all()
     serializer_class = serializers.FrameSerializer
     filter_fields = ('frame_index', 'subdir', 'name', 'video')
-
-
-class FrameLabelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin,
-                        mixins.DestroyModelMixin, viewsets.GenericViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = FrameLabel.objects.all()
-    serializer_class = serializers.FrameLabelSerializer
-    filter_fields = ('frame_index','segment_index', 'video')
-
-
-class RegionLabelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin,
-                         mixins.DestroyModelMixin, viewsets.GenericViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = RegionLabel.objects.all()
-    serializer_class = serializers.RegionLabelSerializer
-
-
-class VideoLabelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin,
-                        mixins.DestroyModelMixin, viewsets.GenericViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = VideoLabel.objects.all()
-    serializer_class = serializers.VideoLabelSerializer
-
-
-class SegmentLabelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin,
-                          mixins.DestroyModelMixin, viewsets.GenericViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = SegmentLabel.objects.all()
-    serializer_class = serializers.SegmentLabelSerializer
-
-
-class TubeLabelViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin,
-                       mixins.DestroyModelMixin, viewsets.GenericViewSet):
-    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = TubeLabel.objects.all()
-    serializer_class = serializers.TubeLabelSerializer
 
 
 class SegmentViewSet(viewsets.ReadOnlyModelViewSet):
@@ -140,32 +75,10 @@ class RegionViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Cre
     filter_fields = ('video',)
 
 
-class DVAPQLViewSet(viewsets.ModelViewSet):
+class QueryViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = DVAPQL.objects.all()
-    serializer_class = serializers.DVAPQLSerializer
-
-    def perform_create(self, serializer):
-        instance = serializer.save(user=self.request.user)
-        p = DVAPQLProcess(instance)
-        spec = json.loads(self.request.POST.get('script'))
-        p.create_from_json(spec, self.request.user)
-        p.launch()
-
-    def perform_update(self, serializer):
-        """
-        Immutable Not allowed
-        :param serializer:
-        :return:
-        """
-        raise NotImplementedError
-
-    def perform_destroy(self, instance):
-        """
-        :param instance:
-        :return:
-        """
-        raise ValueError, "Not allowed to delete"
+    queryset = Query.objects.all()
+    serializer_class = serializers.QuerySerializer
 
 
 class QueryResultsViewSet(viewsets.ReadOnlyModelViewSet):
@@ -189,16 +102,22 @@ class IndexEntriesViewSet(viewsets.ReadOnlyModelViewSet):
     filter_fields = ('video', 'algorithm', 'detection_name')
 
 
-class LabelViewSet(viewsets.ModelViewSet):
+class AppliedLabelViewSet(viewsets.ModelViewSet):
     permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
-    queryset = Label.objects.all()
-    serializer_class = serializers.LabelSerializer
+    queryset = AppliedLabel.objects.all()
+    serializer_class = serializers.AppliedLabelSerializer
 
 
 class VDNServerViewSet(viewsets.ModelViewSet):
     permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
     queryset = VDNServer.objects.all()
     serializer_class = serializers.VDNServerSerializer
+
+
+class VDNDatasetViewSet(viewsets.ModelViewSet):
+    permission_classes = (IsAuthenticatedOrReadOnly,) if settings.AUTH_DISABLED else (IsAuthenticated,)
+    queryset = VDNDataset.objects.all()
+    serializer_class = serializers.VDNDatasetSerializer
 
 
 class TubeViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
@@ -225,25 +144,8 @@ class VideoList(UserPassesTestMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super(VideoList, self).get_context_data(**kwargs)
-        context['exports'] = TEvent.objects.all().filter(operation='perform_export')
-        return context
-
-    def test_func(self):
-        return user_check(self.request.user)
-
-
-class TEventDetail(UserPassesTestMixin, DetailView):
-    model = TEvent
-
-    def get_context_data(self, **kwargs):
-        context = super(TEventDetail, self).get_context_data(**kwargs)
-        try:
-            tr = TaskResult.objects.get(task_id=context['object'].task_id)
-        except TaskResult.DoesNotExist:
-            context['celery_task'] = None
-            pass
-        else:
-            context['celery_task'] = tr
+        context['exports'] = TEvent.objects.all().filter(event_type=TEvent.EXPORT)
+        context['s3_exports'] = TEvent.objects.all().filter(event_type=TEvent.S3EXPORT)
         return context
 
     def test_func(self):
@@ -258,8 +160,6 @@ class TEventList(UserPassesTestMixin, ListView):
         kwargs = {}
         if self.kwargs.get('pk',None):
             kwargs['video_id']=self.kwargs['pk']
-        elif self.kwargs.get('process_pk',None):
-            kwargs['parent_process_id']=self.kwargs['process_pk']
         if self.kwargs.get('status',None):
             if self.kwargs['status'] == 'running':
                 kwargs['seconds__lt'] = 0
@@ -284,11 +184,17 @@ class TEventList(UserPassesTestMixin, ListView):
         if self.kwargs.get('pk',None):
             context['video'] = Video.objects.get(pk=self.kwargs['pk'])
             context['header'] = "video/dataset : {}".format(context['video'].name)
-        if self.kwargs.get('process_pk',None):
-            process_pk = self.kwargs.get('process_pk',None)
-            context['header'] = "process : {}".format(process_pk)
         if self.kwargs.get('status',None):
             context['header'] += " with status {}".format(self.kwargs['status'])
+        context['settings_queues'] = set(settings.TASK_NAMES_TO_QUEUE.values())
+        task_list = []
+        for k, v in settings.TASK_NAMES_TO_TYPE.iteritems():
+            task_list.append({'name': k,
+                              'type': v,
+                              'queue': settings.TASK_NAMES_TO_QUEUE[k],
+                              'edges': []
+                              })
+        context['task_list'] = task_list
         return context
 
     def test_func(self):
@@ -302,10 +208,16 @@ class VideoDetail(UserPassesTestMixin, DetailView):
         context = super(VideoDetail, self).get_context_data(**kwargs)
         max_frame_index = Frame.objects.all().filter(video=self.object).aggregate(Max('frame_index'))[
             'frame_index__max']
-        context['exports'] = TEvent.objects.all().filter(operation='perform_export', video=self.object)
+        context['exports'] = TEvent.objects.all().filter(event_type=TEvent.EXPORT, video=self.object)
+        context['s3_exports'] = TEvent.objects.all().filter(event_type=TEvent.S3EXPORT, video=self.object)
         context['annotation_count'] = Region.objects.all().filter(video=self.object,
                                                                   region_type=Region.ANNOTATION).count()
-        context['exportable_annotation_count'] = 0
+        if self.object.vdn_dataset:
+            context['exportable_annotation_count'] = Region.objects.all().filter(video=self.object,
+                                                                                 vdn_dataset__isnull=True,
+                                                                                 region_type=Region.ANNOTATION).count()
+        else:
+            context['exportable_annotation_count'] = 0
         context['url'] = '{}{}/video/{}.mp4'.format(settings.MEDIA_URL, self.object.pk, self.object.pk)
         label_list = []
         show_all = self.request.GET.get('show_all_labels', False)
@@ -315,6 +227,8 @@ class VideoDetail(UserPassesTestMixin, DetailView):
             delta = 500
         if max_frame_index <= delta:
             context['frame_list'] = Frame.objects.all().filter(video=self.object).order_by('frame_index')
+            # add
+            context['segment_list'] = Segment.objects.filter(video = self.object)
             context['detection_list'] = Region.objects.all().filter(video=self.object, region_type=Region.DETECTION)
             context['annotation_list'] = Region.objects.all().filter(video=self.object, region_type=Region.ANNOTATION)
             context['offset'] = 0
@@ -351,7 +265,6 @@ class VideoDetail(UserPassesTestMixin, DetailView):
     def test_func(self):
         return user_check(self.request.user)
 
-
 class ClustersDetails(UserPassesTestMixin, DetailView):
     model = Clusters
 
@@ -376,7 +289,7 @@ class ClustersDetails(UserPassesTestMixin, DetailView):
 
 
 class DetectionDetail(UserPassesTestMixin, DetailView):
-    model = Detector
+    model = CustomDetector
 
     def get_context_data(self, **kwargs):
         context = super(DetectionDetail, self).get_context_data(**kwargs)
@@ -443,30 +356,22 @@ class SegmentDetail(UserPassesTestMixin, DetailView):
         return user_check(self.request.user)
 
 
-class VisualSearchList(UserPassesTestMixin, ListView):
-    model = DVAPQL
-    template_name = "dvaapp/query_list.html"
+class QueryList(UserPassesTestMixin, ListView):
+    model = Query
 
     def test_func(self):
         return user_check(self.request.user)
 
-    def get_queryset(self):
-        new_context = DVAPQL.objects.filter(process_type=DVAPQL.QUERY).order_by('-created')
-        return new_context
 
-
-class VisualSearchDetail(UserPassesTestMixin, DetailView):
-    model = DVAPQL
-    template_name = "dvaapp/query_detail.html"
+class QueryDetail(UserPassesTestMixin, DetailView):
+    model = Query
 
     def get_context_data(self, **kwargs):
-        context = super(VisualSearchDetail, self).get_context_data(**kwargs)
-        qp = DVAPQLProcess(process=context['object'],media_dir=settings.MEDIA_ROOT)
-        qp.collect()
+        context = super(QueryDetail, self).get_context_data(**kwargs)
+        qp = QueryProcessing()
+        qp.load_from_db(self.object,settings.MEDIA_ROOT)
+        qp.collect_results()
         context['results'] = qp.context.items()
-        script = context['object'].script
-        script[u'image_data_b64'] = "<excluded>"
-        context['plan'] = script
         context['url'] = '{}queries/{}.png'.format(settings.MEDIA_URL, self.object.pk, self.object.pk)
         return context
 
@@ -474,63 +379,12 @@ class VisualSearchDetail(UserPassesTestMixin, DetailView):
         return user_check(self.request.user)
 
 
-class ProcessList(UserPassesTestMixin, ListView):
-    model = DVAPQL
-    template_name = "dvaapp/process_list.html"
-    paginate_by = 50
+class VDNDatasetDetail(UserPassesTestMixin, DetailView):
+    model = VDNDataset
 
     def get_context_data(self, **kwargs):
-        context = super(ProcessList, self).get_context_data(**kwargs)
-        return context
-
-    def test_func(self):
-        return user_check(self.request.user)
-
-    def get_queryset(self):
-        new_context = DVAPQL.objects.filter().order_by('-created')
-        return new_context
-
-
-class ProcessDetail(UserPassesTestMixin, DetailView):
-    model = DVAPQL
-    template_name = "dvaapp/process_detail.html"
-
-    def get_context_data(self, **kwargs):
-        context = super(ProcessDetail, self).get_context_data(**kwargs)
-        context['json'] = json.dumps(context['object'].script,indent=4)
-        context['pending_tasks'] = TEvent.objects.all().filter(parent_process=self.object,started=False, errored=False).count()
-        context['running_tasks'] = TEvent.objects.all().filter(parent_process=self.object,started=True, completed=False, errored=False).count()
-        context['successful_tasks'] = TEvent.objects.all().filter(parent_process=self.object,completed=True).count()
-        context['errored_tasks'] = TEvent.objects.all().filter(parent_process=self.object,errored=True).count()
-        return context
-
-    def test_func(self):
-        return user_check(self.request.user)
-
-
-class StoredProcessList(UserPassesTestMixin, ListView):
-    model = StoredDVAPQL
-    template_name = "dvaapp/stored_process_list.html"
-    paginate_by = 20
-    ordering = "-created"
-
-    def get_context_data(self, **kwargs):
-        context = super(StoredProcessList, self).get_context_data(**kwargs)
-        context['examples'] = json.dumps(EXAMPLES, indent=None)
-        return context
-
-    def test_func(self):
-        return user_check(self.request.user)
-
-
-class StoredProcessDetail(UserPassesTestMixin, DetailView):
-    model = StoredDVAPQL
-    template_name = "dvaapp/stored_process_detail.html"
-
-    def get_context_data(self, **kwargs):
-        context = super(StoredProcessDetail, self).get_context_data(**kwargs)
-        context['json'] = json.dumps(context['object'].script,indent=4)
-        return context
+        context = super(VDNDatasetDetail, self).get_context_data(**kwargs)
+        context['video'] = Video.objects.get(vdn_dataset=context['object'])
 
     def test_func(self):
         return user_check(self.request.user)
@@ -539,23 +393,17 @@ class StoredProcessDetail(UserPassesTestMixin, DetailView):
 @user_passes_test(user_check)
 def search(request):
     if request.method == 'POST':
-        qp = DVAPQLProcess()
+        qp = QueryProcessing()
         qp.create_from_request(request)
-        qp.launch()
+        qp.send_tasks()
         qp.wait()
-        qp.collect()
-        return JsonResponse(data={'task_id': "",
-                                  'primary_key': qp.process.pk,
-                                  'results': qp.context,
-                                  'url': '{}queries/{}.png'.format(settings.MEDIA_URL, qp.process.pk)
-                                  })
+        qp.collect_results()
+        return JsonResponse(data={'task_id': "", 'primary_key': qp.query.pk, 'results': qp.context,
+                                  'url': '{}queries/{}.png'.format(settings.MEDIA_URL, qp.query.pk)})
 
 
 def home(request):
-    if request.user.is_authenticated:
-        return redirect("app")
-    else:
-        return render(request, 'home.html', {})
+    return render(request, 'home.html', {})
 
 
 @user_passes_test(user_check)
@@ -572,9 +420,9 @@ def index(request, query_pk=None, frame_pk=None, detection_pk=None):
     else:
         form = UploadFileForm()
     context = {'form': form}
-    context['indexes'] = {k.name:{'pk':k.pk,'name':k.name,'algorithm':k.name} for k in Indexer.objects.all()}
+    context['indexes'] = settings.VISUAL_INDEXES
     if query_pk:
-        previous_query = DVAPQL.objects.get(pk=query_pk)
+        previous_query = Query.objects.get(pk=query_pk)
         context['initial_url'] = '{}queries/{}.png'.format(settings.MEDIA_URL, query_pk)
     elif frame_pk:
         frame = Frame.objects.get(pk=frame_pk)
@@ -583,22 +431,22 @@ def index(request, query_pk=None, frame_pk=None, detection_pk=None):
         detection = Region.objects.get(pk=detection_pk)
         context['initial_url'] = '{}{}/regions/{}.jpg'.format(settings.MEDIA_URL, detection.video.pk, detection.pk)
     context['frame_count'] = Frame.objects.count()
-    context['query_count'] = DVAPQL.objects.filter(process_type=DVAPQL.QUERY).count()
-    context['process_count'] = DVAPQL.objects.filter(process_type=DVAPQL.PROCESS).count()
+    context['query_count'] = Query.objects.count()
     context['index_entries_count'] = IndexEntries.objects.count()
+    context['external_datasets_count'] = VDNDataset.objects.count()
     context['external_servers_count'] = VDNServer.objects.count()
     context['task_events_count'] = TEvent.objects.count()
     context['pending_tasks'] = TEvent.objects.all().filter(started=False, errored=False).count()
     context['running_tasks'] = TEvent.objects.all().filter(started=True, completed=False, errored=False).count()
     context['successful_tasks'] = TEvent.objects.all().filter(started=True, completed=True).count()
     context['errored_tasks'] = TEvent.objects.all().filter(errored=True).count()
-    context['video_count'] = Video.objects.count()
+    context['video_count'] = Video.objects.count() - context['query_count']
     context['index_entries'] = IndexEntries.objects.all()
     context['region_count'] = Region.objects.all().count()
     context['tube_count'] = Tube.objects.all().count()
-    context["videos"] = Video.objects.all().filter()
-    context['detector_count'] = Detector.objects.all().count()
-    context['rate'] = defaults.DEFAULT_RATE
+    context["videos"] = Video.objects.all().filter(parent_query__isnull=True)
+    context['manual_tasks'] = settings.MANUAL_VIDEO_TASKS
+    context['custom_detector_count'] = CustomDetector.objects.all().count()
     return render(request, 'dashboard.html', context)
 
 
@@ -608,9 +456,10 @@ def assign_video_labels(request):
         video = Video.objects.get(pk=request.POST.get('video_pk'))
         for k in request.POST.get('labels').split(','):
             if k.strip():
-                dl = VideoLabel()
+                dl = AppliedLabel()
                 dl.video = video
-                dl.label = Label.objects.get_or_create(name=k,set="UI")[0]
+                dl.label_name = k.strip()
+                dl.source = dl.UI
                 dl.save()
         return redirect('video_detail', pk=video.pk)
     else:
@@ -659,8 +508,8 @@ def annotate_entire_frame(request, frame_pk):
     frame = Frame.objects.get(pk=frame_pk)
     annotation = None
     if request.method == 'POST':
-        if request.POST.get('text').strip() \
-                or request.POST.get('metadata').strip() \
+        if request.POST.get('metadata_text').strip() \
+                or request.POST.get('metadata_json').strip() \
                 or request.POST.get('object_name', None):
             annotation = Region()
             annotation.region_type = Region.ANNOTATION
@@ -669,27 +518,22 @@ def annotate_entire_frame(request, frame_pk):
             annotation.h = 0
             annotation.w = 0
             annotation.full_frame = True
-            annotation.text = request.POST.get('text')
-            annotation.metadata = request.POST.get('metadata')
+            annotation.metadata_text = request.POST.get('metadata_text')
+            annotation.metadata_json = request.POST.get('metadata_json')
             annotation.object_name = request.POST.get('object_name', 'frame_metadata')
             annotation.frame = frame
             annotation.video = frame.video
             annotation.save()
         for label_name in request.POST.get('tags').split(','):
             if label_name.strip():
+                dl = AppliedLabel()
+                dl.video = frame.video
+                dl.frame = frame
+                dl.label_name = label_name.strip()
                 if annotation:
-                    dl = RegionLabel()
-                    dl.video = frame.video
-                    dl.frame = frame
-                    dl.label = Label.objects.get_or_create(name=label_name,set="UI")[0]
                     dl.region = annotation
-                    dl.save()
-                else:
-                    dl = FrameLabel()
-                    dl.video = frame.video
-                    dl.frame = frame
-                    dl.label = Label.objects.get_or_create(name=label_name,set="UI")[0]
-                    dl.save()
+                dl.source = dl.UI
+                dl.save()
     return redirect("frame_detail", pk=frame.pk)
 
 
@@ -699,33 +543,9 @@ def yt(request):
         form = YTVideoForm(request.POST, request.FILES)
         user = request.user if request.user.is_authenticated else None
         if form.is_valid():
-            rate = form.cleaned_data['nth']
-            rescale = form.cleaned_data['rescale'] if 'rescale' in form.cleaned_data else 0
-            video = handle_video_url(form.cleaned_data['name'], form.cleaned_data['url'], user=user)
-            process_spec = {
-                'process_type': DVAPQL.PROCESS,
-                'tasks': [{'video_id': video.pk,
-                          'operation': 'perform_import',
-                          'arguments': {'source': "URL",
-                                        'next_tasks':[{'video_id': video.pk,
-                                                       'operation': 'perform_video_segmentation',
-                                                       'arguments': {
-                                                           'next_tasks': [
-                                                               {'operation': 'perform_video_decode',
-                                                                'arguments': {
-                                                                    'rate': rate, 'rescale': rescale,
-                                                                    'segments_batch_size': defaults.DEFAULT_SEGMENTS_BATCH_SIZE,
-                                                                    'next_tasks': defaults.DEFAULT_PROCESSING_PLAN_VIDEO
-                                                                }
-                                                                }
-                                                           ]},
-                                                       },]
-                                        }
-                          },]
-                }
-            p = DVAPQLProcess()
-            p.create_from_json(process_spec, user)
-            p.launch()
+            handle_youtube_video(form.cleaned_data['name'], form.cleaned_data['url'], user=user,
+                                 rate=form.cleaned_data['nth'],
+                                 rescale=form.cleaned_data['rescale'] if 'rescale' in form.cleaned_data else 0)
         else:
             raise ValueError
     else:
@@ -749,28 +569,22 @@ def export_video(request):
             if export_method == 's3':
                 key = request.POST.get('key')
                 bucket = request.POST.get('bucket')
-                region = request.POST.get('region','us-east-1')
-                process_spec = {'process_type':DVAPQL.PROCESS,
-                          'tasks':[
-                              {
-                                  'video_id':video.pk,
-                                  'operation':'perform_export',
-                                  'arguments': {'key':key,'bucket':bucket,'region':region,'destination':'S3'}
-                              },
-                          ]}
+                s3export = TEvent()
+                s3export.event_type = TEvent.S3EXPORT
+                s3export.video = video
+                s3export.key = key
+                s3export.bucket = bucket
+                s3export.save()
+                task_name = 'backup_video_to_s3'
+                app.send_task(task_name, args=[s3export.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
             else:
-                process_spec = {'process_type':DVAPQL.PROCESS,
-                          'tasks':[
-                              {
-                                  'video_id':video.pk,
-                                  'operation':'perform_export',
-                                  'arguments':{'destination':'FILE'}
-                              },
-                          ]
-                          }
-            p = DVAPQLProcess()
-            p.create_from_json(process_spec)
-            p.launch()
+                task_name = 'export_video_by_id'
+                export_video_task = TEvent()
+                export_video_task.event_type = TEvent.EXPORT
+                export_video_task.video = video
+                export_video_task.operation = task_name
+                export_video_task.save()
+                app.send_task(task_name, args=[export_video_task.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
         return redirect('video_list')
     else:
         raise NotImplementedError
@@ -787,6 +601,69 @@ def coarse_code_detail(request, pk, coarse_code):
 
 
 @user_passes_test(user_check)
+def push(request, video_id):
+    video = Video.objects.get(pk=video_id)
+    if request.method == 'POST':
+        push_type = request.POST.get('push_type')
+        server = VDNServer.objects.get(pk=request.POST.get('server_pk'))
+        token = request.POST.get('token_{}'.format(server.pk))
+        server.last_token = token
+        server.save()
+        server_url = server.url
+        if not server_url.endswith('/'):
+            server_url += '/'
+        headers = {'Authorization': 'Token {}'.format(server.last_token)}
+        if push_type == 'annotation':
+            new_vdn_dataset = create_child_vdn_dataset(video, server, headers)
+            for key in request.POST:
+                if key.startswith('annotation_') and request.POST[key]:
+                    annotation = Region.objects.get(pk=int(key.split('annotation_')[1]))
+                    data = {
+                        'label': annotation.label,
+                        'metadata_text': annotation.metadata_text,
+                        'x': annotation.x,
+                        'y': annotation.y,
+                        'w': annotation.w,
+                        'h': annotation.h,
+                        'full_frame': annotation.full_frame,
+                        'parent_frame_index': annotation.parent_frame_index,
+                        'dataset_id': int(new_vdn_dataset.url.split('/')[-2]),
+                    }
+                    r = requests.post("{}/api/annotations/".format(server_url), data=data, headers=headers)
+                    if r.status_code == 201:
+                        annotation.vdn_dataset = new_vdn_dataset
+                        annotation.save()
+                    else:
+                        raise ValueError
+        elif push_type == 'dataset':
+            key = request.POST.get('key')
+            region = request.POST.get('region')
+            bucket = request.POST.get('bucket')
+            name = request.POST.get('name')
+            description = request.POST.get('description')
+            s3export = TEvent()
+            s3export.event_type = TEvent.S3EXPORT
+            s3export.video = video
+            s3export.key = key
+            s3export.bucket = bucket
+            s3export.save()
+            create_root_vdn_dataset(s3export, server, headers, name, description)
+            task_name = 'push_video_to_vdn_s3'
+            app.send_task(task_name, args=[s3export.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
+        else:
+            raise NotImplementedError
+
+    servers = VDNServer.objects.all()
+    context = {'video': video, 'servers': servers}
+    if video.vdn_dataset:
+        context['annotations'] = Region.objects.all().filter(video=video, vdn_dataset__isnull=True,
+                                                             region_type=Region.ANNOTATION)
+    else:
+        context['annotations'] = Region.objects.all().filter(video=video, region_type=Region.ANNOTATION)
+    return render(request, 'push.html', context)
+
+
+@user_passes_test(user_check)
 def status(request):
     context = {}
     context['logs'] = []
@@ -796,35 +673,113 @@ def status(request):
 
 
 @user_passes_test(user_check)
-def workers(request):
-    timeout = 1.0
+def indexes(request):
     context = {
-        'timeout':timeout,
-        'actions':ManagementAction.objects.all()
+        'visual_index_list': settings.VISUAL_INDEXES.items(),
+        'index_entries': IndexEntries.objects.all(),
+        "videos": Video.objects.all().filter(parent_query__isnull=True),
+        "region_types": Region.REGION_TYPES
     }
     if request.method == 'POST':
-        op = request.POST.get("op","")
-        host_name = request.POST.get("host_name","").strip()
-        queue_name = request.POST.get("queue_name","").strip()
-        if op =="list_workers":
-            context["queues"] = app.control.inspect(timeout=timeout).active_queues()
-        elif op == "list":
-            t = app.send_task('manage_host', args=[op, ], exchange='qmanager')
-            t.wait(timeout=timeout)
-        elif op == "gpuinfo":
-            t = app.send_task('manage_host', args=[op, ], exchange='qmanager')
-            t.wait(timeout=timeout)
-        elif op == "launch":
-            t = app.send_task('manage_host', args=[op,host_name,queue_name],exchange='qmanager')
-            t.wait(timeout=timeout)
-    return render(request, 'workers.html', context)
+        index_event = TEvent()
+        index_event.operation = 'perform_indexing'
+        arguments = {
+            'region_type__in': request.POST.getlist('region_type__in', []),
+            'w__gte': int(request.POST.get('w__gte')),
+            'h__gte': int(request.POST.get('h__gte'))
+        }
+        for optional_key in ['metadata_text__contains', 'object_name__contains', 'object_name']:
+            if request.POST.get(optional_key, None):
+                arguments[optional_key] = request.POST.get(optional_key)
+        for optional_key in ['h__lte', 'w__lte']:
+            if request.POST.get(optional_key, None):
+                arguments[optional_key] = int(request.POST.get(optional_key))
+        args = {'filters':arguments,'index':request.POST.get('visual_index_name')}
+        queue = settings.VISUAL_INDEXES[args['index']]['indexer_queue']
+        index_event.arguments_json = json.dumps(args)
+        index_event.video_id = request.POST.get('video_id')
+        index_event.save()
+        app.send_task(name=index_event.operation, args=[index_event.pk, ],queue=queue)
+    return render(request, 'indexes.html', context)
+
+
+@user_passes_test(user_check)
+def detectors(request):
+    context = {}
+    context["videos"] = Video.objects.all().filter(parent_query__isnull=True)
+    context["detectors"] = CustomDetector.objects.all()
+    detector_stats = []
+    for d in CustomDetector.objects.all():
+        class_dist = json.loads(d.class_distribution) if d.class_distribution.strip() else {}
+        detector_stats.append(
+            {
+                'name':d.name,
+                'classes': class_dist,
+                'frames_count':d.frames_count,
+                'boxes_count':d.boxes_count,
+                'pk':d.pk
+            }
+        )
+    context["detector_stats"] = detector_stats
+    if request.method == 'POST':
+        if request.POST.get('action') == 'detect':
+            detector_pk = request.POST.get('detector_pk')
+            video_pk = request.POST.get('video_pk')
+            task_name = "detect_custom_objects"
+            apply_event = TEvent()
+            apply_event.video_id = video_pk
+            apply_event.operation = task_name
+            apply_event.arguments_json = json.dumps({'detector_pk': int(detector_pk)})
+            apply_event.save()
+            app.send_task(name=task_name, args=[apply_event.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
+        elif request.POST.get('action') == 'estimate':
+            args = request.POST.get('args')
+            args = json.loads(args) if args.strip() else {}
+            args['name'] = request.POST.get('name')
+            args['labels'] = [k.strip() for k in request.POST.get('labels').split(',') if k.strip()]
+            args['object_names'] = [k.strip() for k in request.POST.get('object_names').split(',') if k.strip()]
+            args['excluded_videos'] = request.POST.getlist('excluded_videos')
+            labels = set(args['labels']) if 'labels' in args else set()
+            object_names = set(args['object_names']) if 'object_names' in args else set()
+            class_distribution, class_names, rboxes, rboxes_set, frames, i_class_names = create_detector_dataset(object_names, labels)
+            context["estimate"] = {
+                'args':args,
+                'class_distribution':class_distribution,
+                'class_names':class_names,
+                'rboxes':rboxes,
+                'rboxes_set':rboxes_set,
+                'frames':frames,
+                'i_class_names':i_class_names
+            }
+        else:
+            args = request.POST.get('args')
+            args = json.loads(args) if args.strip() else {}
+            args['name'] = request.POST.get('name')
+            args['labels'] = [k.strip() for k in request.POST.get('labels').split(',') if k.strip()]
+            args['object_names'] = [k.strip() for k in request.POST.get('object_names').split(',') if k.strip()]
+            args['excluded_videos'] = request.POST.getlist('excluded_videos')
+            detector = CustomDetector()
+            detector.name = args['name']
+            detector.algorithm = "yolo"
+            detector.arguments = json.dumps(args)
+            detector.save()
+            args['detector_pk'] = detector.pk
+            task_name = "train_yolo_detector"
+            train_event = TEvent()
+            train_event.operation = task_name
+            train_event.arguments_json = json.dumps(args)
+            train_event.save()
+            detector.source = train_event
+            detector.save()
+            app.send_task(name=task_name, args=[train_event.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
+    return render(request, 'detectors.html', context)
 
 
 @user_passes_test(user_check)
 def training(request):
     context = {}
-    context["videos"] = Video.objects.all().filter()
-    context["detectors"] = Detector.objects.all()
+    context["videos"] = Video.objects.all().filter(parent_query__isnull=True)
+    context["detectors"] = CustomDetector.objects.all()
     if request.method == 'POST':
         if request.POST.get('action') == 'estimate':
             args = request.POST.get('args')
@@ -852,26 +807,37 @@ def training(request):
             args['labels'] = [k.strip() for k in request.POST.get('labels').split(',') if k.strip()]
             args['object_names'] = [k.strip() for k in request.POST.get('object_names').split(',') if k.strip()]
             args['excluded_videos'] = request.POST.getlist('excluded_videos')
-            detector = Detector()
+            detector = CustomDetector()
             detector.name = args['name']
             detector.algorithm = "yolo"
             detector.arguments = json.dumps(args)
             detector.save()
             args['detector_pk'] = detector.pk
-            p = DVAPQLProcess()
-            p.create_from_json(j={
-                "process_type":DVAPQL.PROCESS,
-                "tasks":[{'operation':"perform_detector_training",
-                          'arguments':args,}]
-            },user=request.user)
-            p.launch()
+            task_name = "train_yolo_detector"
+            train_event = TEvent()
+            train_event.operation = task_name
+            train_event.arguments_json = json.dumps(args)
+            train_event.save()
+            detector.source = train_event
             detector.save()
+            app.send_task(name=task_name, args=[train_event.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
     return render(request, 'training.html', context)
 
+def filter_segment_start_time(request,video_id,segment_id):
+
+    if request.is_ajax():
+        ajax_string = 'ajax request: '
+        video_name = Video.objects.filter(pk = video_id)
+        segment_list = Segment.objects.filter(video = video_name)
+        segment_single = segment_list.get(segment_index = segment_id)
+    else:
+        ajax_string = 'not ajax request: '
+    r = HttpResponse(segment_single.start_time)
+    return r
 
 @user_passes_test(user_check)
 def textsearch(request):
-    context = {'results': {}, "videos": Video.objects.all().filter()}
+    context = {'results': {}, "videos": Video.objects.all().filter(parent_query__isnull=True)}
     q = request.GET.get('q')
     if q:
         offset = int(request.GET.get('offset',0))
@@ -883,14 +849,23 @@ def textsearch(request):
         context['offset'] = offset
         context['limit'] = limit
         if request.GET.get('regions'):
-            context['results']['regions_meta'] = Region.objects.filter(text__search=q)[offset:limit]
+            context['results']['regions_meta'] = Region.objects.filter(metadata_text__search=q)[offset:limit]
             context['results']['regions_name'] = Region.objects.filter(object_name__search=q)[offset:limit]
         if request.GET.get('frames'):
             context['results']['frames_name'] = Frame.objects.filter(name__search=q)[offset:limit]
             context['results']['frames_subdir'] = Frame.objects.filter(subdir__search=q)[offset:limit]
         if request.GET.get('labels'):
-            context['results']['labels'] = Label.objects.filter(name__search=q)[offset:limit]
+            context['results']['labels'] = AppliedLabel.objects.filter(label_name__search=q)[offset:limit]
     return render(request, 'textsearch.html', context)
+
+
+@user_passes_test(user_check)
+def ocr(request):
+    context = {'results': {},
+               "videos": Video.objects.all().filter(parent_query__isnull=True),
+               'manual_tasks':settings.OCR_VIDEO_TASKS
+               }
+    return render(request, 'ocr.html', context)
 
 
 @user_passes_test(user_check)
@@ -914,38 +889,13 @@ def clustering(request):
         c.m = m
         c.v = v
         c.save()
-        p = DVAPQLProcess()
-        p.create_from_json(j={
-            "process_type": DVAPQL.PROCESS,
-            "tasks": [{'operation': "perform_clustering",
-                       'arguments': {'clusters_id':c.pk},
-                       }]
-        }, user=request.user)
-        p.launch()
+        task_name = "perform_clustering"
+        new_task = TEvent()
+        new_task.clustering = c
+        new_task.operation = task_name
+        new_task.save()
+        app.send_task(name=task_name, args=[new_task.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
     return render(request, 'clustering.html', context)
-
-
-@user_passes_test(user_check)
-def submit_process(request):
-    if request.method == 'POST':
-        process_pk = request.POST.get('process_pk',None)
-        if process_pk is None:
-            p = DVAPQLProcess()
-            p.create_from_json(j=json.loads(request.POST.get('script')), user=request.user)
-            p.launch()
-        else:
-            p = DVAPQLProcess(process=DVAPQL.objects.get(pk=process_pk))
-            p.launch()
-        return redirect("process_detail",pk=p.process.pk)
-
-
-@user_passes_test(user_check)
-def validate_process(request):
-    if request.method == 'POST':
-        p = DVAPQLProcess()
-        p.create_from_json(j=json.loads(request.POST.get('script')), user=request.user)
-        p.validate()
-    return redirect("process_detail",pk=p.process.pk)
 
 
 @user_passes_test(user_check)
@@ -957,26 +907,6 @@ def delete_object(request):
             if annotation.region_type == Region.ANNOTATION:
                 annotation.delete()
     return JsonResponse({'status': True})
-
-
-@user_passes_test(force_user_check)
-def security(request):
-    context = {}
-    context['username'] = request.user.username
-    token, created = Token.objects.get_or_create(user=request.user)
-    context['token'] = token
-    return render(request, 'security.html', context=context)
-
-
-@user_passes_test(force_user_check)
-def expire_token(request):
-    # TODO Check if this is correct
-    if request.method == 'POST':
-        if request.POST.get('expire',False):
-            token, created = Token.objects.get_or_create(user=request.user)
-            if not created:
-                token.delete()
-    return redirect("security")
 
 
 @user_passes_test(user_check)
@@ -1000,7 +930,7 @@ def import_detector(request):
         import_vdn_detector_url(server, url, user)
     else:
         raise NotImplementedError
-    return redirect('models')
+    return redirect('detectors')
 
 
 @user_passes_test(user_check)
@@ -1009,50 +939,38 @@ def import_s3(request):
         keys = request.POST.get('key')
         region = request.POST.get('region')
         bucket = request.POST.get('bucket')
-        rate = request.POST.get('rate',defaults.DEFAULT_RATE)
-        rescale = request.POST.get('rescale',defaults.DEFAULT_RESCALE)
-        process_spec = {
-            'process_type': DVAPQL.PROCESS,
-        }
-        user = request.user if request.user.is_authenticated else None
-        tasks = []
         for key in keys.strip().split('\n'):
-            key = key.strip()
-            if key:
+            if key.strip():
+                s3import = TEvent()
+                s3import.event_type = TEvent.S3IMPORT
+                s3import.key = key.strip()
+                s3import.bucket = bucket
                 video = Video()
+                user = request.user if request.user.is_authenticated else None
                 if user:
                     video.uploader = user
                 video.name = "pending S3 import {} s3://{}/{}".format(region, bucket, key)
                 video.save()
-                extract_task = {'arguments': {'rate': rate, 'rescale': rescale,
-                                              'next_tasks': defaults.DEFAULT_PROCESSING_PLAN_DATASET},
-                                 'video_id': video.pk,
-                                 'operation': 'perform_dataset_extraction'}
-                segment_decode_task = {'video_id': video.pk,
-                                        'operation': 'perform_video_segmentation',
-                                        'arguments': {
-                                            'next_tasks': [
-                                                {'operation': 'perform_video_decode',
-                                                 'arguments': {
-                                                     'rate': rate, 'rescale': rescale,
-                                                     'segments_batch_size':defaults.DEFAULT_SEGMENTS_BATCH_SIZE,
-                                                     'next_tasks': defaults.DEFAULT_PROCESSING_PLAN_VIDEO
-                                                }
-                                            }
-                                            ]},
-                                        }
-                if key.endswith('.dva_export.zip'):
-                    next_tasks = []
-                elif key.endswith('.zip'):
-                    next_tasks = [extract_task,]
-                else:
-                    next_tasks = [segment_decode_task,]
-                tasks.append({'video_id':video.pk,'operation':'perform_import',
-                              'arguments':{'key':key,'bucket':bucket,'region':region, 'source':'S3', 'next_tasks':next_tasks}})
-        process_spec['tasks'] = tasks
-        p = DVAPQLProcess()
-        p.create_from_json(process_spec,user)
-        p.launch()
+                s3import.video = video
+                s3import.save()
+                task_name = 'import_video_from_s3'
+                app.send_task(name=task_name, args=[s3import.pk, ], queue=settings.TASK_NAMES_TO_QUEUE[task_name])
+    else:
+        raise NotImplementedError
+    return redirect('video_list')
+
+
+@user_passes_test(user_check)
+def video_send_task(request):
+    if request.method == 'POST':
+        video_id = int(request.POST.get('video_id'))
+        args = json.loads(request.POST.get('arguments_json','{}'))
+        task_name = request.POST.get('task_name')
+        manual_event = TEvent()
+        manual_event.video_id = video_id
+        manual_event.arguments_json = json.dumps(args)
+        manual_event.save()
+        app.send_task(name=task_name, args=[manual_event.pk, ], queue=get_queue_name(task_name,args))
     else:
         raise NotImplementedError
     return redirect('video_list')
@@ -1067,6 +985,8 @@ def external(request):
         'servers': VDNServer.objects.all(),
         'available_datasets': {server: json.loads(server.last_response_datasets) for server in VDNServer.objects.all()},
         'available_detectors': {server: json.loads(server.last_response_detectors) for server in VDNServer.objects.all()},
+        'vdn_datasets': VDNDataset.objects.all(),
+        'vdn_detectors': VDNDetector.objects.all()
     }
     return render(request, 'external_data.html', context)
 
@@ -1075,19 +995,22 @@ def external(request):
 def retry_task(request):
     pk = request.POST.get('pk')
     event = TEvent.objects.get(pk=int(pk))
-    spec = {
-        'process_type':DVAPQL.PROCESS,
-        'tasks':[
-            {
-                'operation':event.operation,
-                'arguments':event.arguments
-            }
-        ]
-    }
-    p = DVAPQLProcess()
-    p.create_from_json(spec)
-    p.launch()
-    return redirect('/processes/')
+    context = {}
+    if settings.TASK_NAMES_TO_TYPE[event.operation] == settings.VIDEO_TASK:
+        new_event = TEvent()
+        new_event.video_id = event.video_id
+        new_event.arguments_json = event.arguments_json
+        new_event.operation = event.operation
+        new_event.save()
+        result = app.send_task(name=event.operation, args=[new_event.pk],
+                               queue=settings.TASK_NAMES_TO_QUEUE[event.operation])
+        context['alert'] = "Operation {} on {} submitted".format(event.operation, event.video.name,
+                                                                 queue=settings.TASK_NAMES_TO_QUEUE[event.operation])
+        return redirect('tasks')
+    elif settings.TASK_NAMES_TO_TYPE[event.operation] == settings.QUERY_TASK:
+        return redirect("/requery/{}/".format(event.video.parent_query_id))
+    else:
+        raise NotImplementedError
 
 
 @user_passes_test(user_check)
@@ -1121,128 +1044,3 @@ def rename_video(request):
         return redirect('video_list')
     else:
         return redirect('accounts/login/')
-
-
-@user_passes_test(user_check)
-def models(request):
-    context = {
-        'visual_index_list': Indexer.objects.all(),
-        'index_entries': IndexEntries.objects.all(),
-        "videos": Video.objects.all().filter(),
-        "region_types": Region.REGION_TYPES,
-        "detectors": Detector.objects.all()
-    }
-    detector_stats = []
-    for d in Detector.objects.all():
-        class_dist = json.loads(d.class_distribution) if d.class_distribution.strip() else {}
-        detector_stats.append(
-            {
-                'name':d.name,
-                'classes': class_dist,
-                'frames_count':d.frames_count,
-                'boxes_count':d.boxes_count,
-                'pk':d.pk
-            }
-        )
-    context["detector_stats"] = detector_stats
-    return render(request, 'models.html', context)
-
-
-@user_passes_test(user_check)
-def index_video(request):
-    if request.method == 'POST':
-        filters = {
-            'region_type__in': request.POST.getlist('region_type__in', []),
-            'w__gte': int(request.POST.get('w__gte')),
-            'h__gte': int(request.POST.get('h__gte'))
-         }
-        for optional_key in ['text__contains', 'object_name__contains', 'object_name']:
-            if request.POST.get(optional_key, None):
-                filters[optional_key] = request.POST.get(optional_key)
-        for optional_key in ['h__lte', 'w__lte']:
-            if request.POST.get(optional_key, None):
-                filters[optional_key] = int(request.POST.get(optional_key))
-        args = {'filters':filters,'index':request.POST.get('visual_index_name')}
-        p = DVAPQLProcess()
-        spec = {
-            'process_type':DVAPQL.PROCESS,
-            'tasks':[
-                {
-                    'operation':'perform_indexing',
-                    'arguments':args,
-                    'video_id':request.POST.get('video_id')
-                }
-            ]
-        }
-        user = request.user if request.user.is_authenticated else None
-        p.create_from_json(spec,user)
-        p.launch()
-        redirect('process_detail',pk=p.process.pk)
-    else:
-        raise ValueError
-
-
-@user_passes_test(user_check)
-def detect_objects(request):
-    if request.method == 'POST':
-        detector_pk = request.POST.get('detector_pk')
-        video_pk = request.POST.get('video_pk')
-        p = DVAPQLProcess()
-        p.create_from_json(j={
-            "process_type":DVAPQL.PROCESS,
-            "tasks":[{'operation':"perform_detection",
-                      'arguments':{'detector_pk': int(detector_pk),'detector':"custom"},
-                      'video_id':video_pk}]
-        },user=request.user)
-        p.launch()
-        return redirect('process_detail',pk=p.process.pk)
-    else:
-        raise ValueError
-
-
-@user_passes_test(user_check)
-def train_detector(request):
-    if request.method == 'POST':
-        args = request.POST.get('args')
-        args = json.loads(args) if args.strip() else {}
-        args['name'] = request.POST.get('name')
-        args['labels'] = [k.strip() for k in request.POST.get('labels').split(',') if k.strip()]
-        args['object_names'] = [k.strip() for k in request.POST.get('object_names').split(',') if k.strip()]
-        args['excluded_videos'] = request.POST.getlist('excluded_videos')
-        detector = Detector()
-        detector.name = args['name']
-        detector.algorithm = "yolo"
-        detector.arguments = json.dumps(args)
-        detector.save()
-        args['detector_pk'] = detector.pk
-        p = DVAPQLProcess()
-        p.create_from_json(j={
-            "process_type":DVAPQL.PROCESS,
-            "tasks":[{'operation':"perform_detector_training",
-                      'arguments':args,}]
-        },user=request.user)
-        p.launch()
-        detector.save()
-        return redirect('process_detail', pk=p.process.pk)
-    # elif request.POST.get('action') == 'estimate':
-    #     args = request.POST.get('args')
-    #     args = json.loads(args) if args.strip() else {}
-    #     args['name'] = request.POST.get('name')
-    #     args['labels'] = [k.strip() for k in request.POST.get('labels').split(',') if k.strip()]
-    #     args['object_names'] = [k.strip() for k in request.POST.get('object_names').split(',') if k.strip()]
-    #     args['excluded_videos'] = request.POST.getlist('excluded_videos')
-    #     labels = set(args['labels']) if 'labels' in args else set()
-    #     object_names = set(args['object_names']) if 'object_names' in args else set()
-    #     class_distribution, class_names, rboxes, rboxes_set,
-    #     frames, i_class_names = create_detector_dataset(object_names, labels)
-    #     context["estimate"] = {
-    #         'args':args,
-    #         'class_distribution':class_distribution,
-    #         'class_names':class_names,
-    #         'rboxes':rboxes,
-    #         'rboxes_set':rboxes_set,
-    #         'frames':frames,
-    #         'i_class_names':i_class_names
-    #     }
-    else:
-        raise ValueError

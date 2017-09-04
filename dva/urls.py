@@ -29,4 +29,6 @@ if settings.DVA_PRIVATE_ENABLE:
 
 if settings.DEBUG and settings.MACOS:
     import debug_toolbar
-    urlpatterns = [url(r'^__debug__/', include(debug_toolbar.urls)),] + urlpatterns
+    urlpatterns = [
+        url(r'^__debug__/', include(debug_toolbar.urls)),
+        url(r'^explorer/', include('explorer.urls')),] + urlpatterns

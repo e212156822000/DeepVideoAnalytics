@@ -1,14 +1,8 @@
-import os,logging, sys
-try:
-    import PIL
-    from scipy import misc
-    import numpy as np
-except:
-    pass
-
-if os.environ.get('PYTORCH_MODE',False):
-    pass
-elif os.environ.get('CAFFE_MODE',False):
+import os,logging,subprocess, time, sys
+from collections import defaultdict
+import random
+from time import sleep
+if os.path.isdir('/opt/ctpn/'):
     sys.path.append('/opt/ctpn/CTPN/tools/')
     sys.path.append('/opt/ctpn/CTPN/src/')
     from cfg import Config as cfg
@@ -18,14 +12,12 @@ elif os.environ.get('CAFFE_MODE',False):
     tf = None
     logging.info("Using Caffe only mode")
 else:
-    try:
-        import tensorflow as tf
-        from dvalib.yolo import trainer
-        from .facenet import facenet
-        from .facenet.align import detect_face
-    except:
-        logging.info("Could not import TensorFlow assuming front-end mode")
-
+    import tensorflow as tf
+    from .facenet import facenet
+    from .facenet.align import detect_face
+    from scipy import misc
+    import PIL
+    import numpy as np
 
 def _parse_function(filename):
     image_string = tf.read_file(filename)
@@ -99,20 +91,15 @@ class BaseDetector(object):
 
 class TFDetector(BaseDetector):
 
-    def __init__(self,model_path,class_index_to_string,gpu_fraction=None):
+    def __init__(self,model_path,class_index_to_string):
         super(TFDetector, self).__init__()
         self.model_path = model_path
-        self.class_index_to_string = {int(k):v for k,v in class_index_to_string.items()}
+        self.class_index_to_string = class_index_to_string
         self.session = None
         self.dataset = None
         self.filenames_placeholder = None
         self.image = None
         self.fname = None
-        if gpu_fraction:
-            self.gpu_fraction = gpu_fraction
-        else:
-            self.gpu_fraction = float(os.environ.get('GPU_MEMORY', 0.20))
-
 
     def detect(self,image_path,min_score=0.20):
         self.session.run(self.iterator.initializer, feed_dict={self.filenames_placeholder: [image_path,]})
@@ -150,7 +137,7 @@ class TFDetector(BaseDetector):
                 self.image, self.fname = self.iterator.get_next()
                 tf.import_graph_def(self.od_graph_def, name='',input_map={'image_tensor': self.image})
             config = tf.ConfigProto()
-            config.gpu_options.per_process_gpu_memory_fraction = self.gpu_fraction
+            config.gpu_options.per_process_gpu_memory_fraction = 0.20
             self.session = tf.Session(graph=self.detection_graph,config=config)
             self.boxes = self.detection_graph.get_tensor_by_name('detection_boxes:0')
             self.scores = self.detection_graph.get_tensor_by_name('detection_scores:0')
@@ -158,41 +145,21 @@ class TFDetector(BaseDetector):
             self.num_detections = self.detection_graph.get_tensor_by_name('num_detections:0')
 
 
-class YOLODetector(BaseDetector):
-
-    def __init__(self,args):
-        super(YOLODetector, self).__init__()
-        self.model = trainer.YOLOTrainer(boxes=[], images=[], args=args,test_mode=True)
-        self.session = None
-
-    def detect(self,image_path,min_score=0.20):
-        return self.model.apply(image_path,min_score)
-
-    def load(self):
-        if self.session is None:
-            self.model.load()
-            self.session = True
-
-
 class FaceDetector():
 
-    def __init__(self,session=None,gpu_fraction=None):
+    def __init__(self,session=None):
         self.image_size = 182
         self.margin = 44
+        self.gpu_memory_fraction = 0.20
         self.session = session
         self.minsize = 20
         self.threshold = [0.6, 0.7, 0.7]
         self.factor = 0.709
-        if gpu_fraction:
-            self.gpu_fraction = gpu_fraction
-        else:
-            self.gpu_fraction = float(os.environ.get('GPU_MEMORY', 0.20))
-
 
     def load(self):
         logging.info('Creating networks and loading parameters')
         with tf.Graph().as_default():
-            gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=self.gpu_fraction)
+            gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=self.gpu_memory_fraction)
             self.session = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=False))
             with self.session.as_default():
                 self.pnet, self.rnet, self.onet = detect_face.create_mtcnn(self.session, None)
